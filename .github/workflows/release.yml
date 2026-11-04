@@ -11,7 +11,7 @@ on:
       tag:
         description: "Verze, např. v1.0.1 (Release s tímto tagem se vytvoří na aktuálním commitu main)"
         required: true
-        default: "v1.0.1"
+        default: "v1.1.0"
 
 permissions:
   contents: write
@@ -46,9 +46,10 @@ jobs:
       - name: Build application
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --onedir --name GasbynClipper `
+          python -m PyInstaller --noconfirm --onedir --windowed --name GasbynClipper `
             --collect-all yt_dlp --collect-all faster_whisper --collect-all ctranslate2 `
-            clipper.py
+            --collect-all customtkinter `
+            app.py
           Copy-Item settings.yaml dist\GasbynClipper\
           New-Item -ItemType Directory -Force -Path dist\GasbynClipper\ffmpeg | Out-Null
           Copy-Item ffmpeg_pkg\ffmpeg.exe dist\GasbynClipper\ffmpeg\

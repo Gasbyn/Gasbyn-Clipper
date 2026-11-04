@@ -2,7 +2,7 @@
 ; Instalace je jen pro aktuálního uživatele (není potřeba správce), funguje na Windows 10 i 11.
 
 #define AppName "Gasbyn Clipper"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0"
 
 [Setup]
 AppId={{B7C2D1E4-5A3F-4C8B-9D6E-1F2A3B4C5D6E}

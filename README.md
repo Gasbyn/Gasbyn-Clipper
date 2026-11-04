@@ -1,61 +1,90 @@
 # Gasbyn Clipper
 
-Vlastní nástroj pro Windows: vezme VOD z Kicku (nebo YouTube, nebo lokální video), AI najde nejlepší momenty a vystřihne z nich vertikální klipy 9:16, volitelně s titulky.
+AI klipovač pro Windows. Vezme VOD z Kicku (nebo YouTube, nebo lokální video), AI najde momenty, každému dá **hodnocení 0 až 100** a vystřihne vertikální klipy 9:16 s titulky. Klipy pod nastaveným prahem se nevytvoří.
 
-## Nejjednodušší instalace (Windows 10/11)
+## Instalace (Windows 10/11)
 
-1. Otevři stránku **Releases** tohoto repozitáře a stáhni `Setup.exe`.
+1. Otevři stránku **Releases** a stáhni `Setup.exe`.
 2. Spusť ho a projdi průvodce. Instaluje se jen pro tebe, správce není potřeba.
-3. Spusť **Gasbyn Clipper** ze zástupce, vlož URL VODu a potvrď Enter.
+3. Spusť **Gasbyn Clipper** ze zástupce.
 
-Součástí instalace je ffmpeg. Přepis (Whisper) si při prvním spuštění stáhne model, takže je potřeba internet. Pro výběr klipů potřebuješ ještě Ollamu, nebo OpenRouter klíč (viz níže).
+V instalaci je ffmpeg. Při prvním přepisu se stáhne model Whisper, takže je potřeba internet.
 
-Windows může při prvním spuštění ukázat varování SmartScreen (aplikace není podepsaná certifikátem). Klikni na *Více informací → Přesto spustit*.
+Pro výběr klipů potřebuješ jedno z toho:
+- **Ollama** (zdarma, běží lokálně): nainstaluj z ollama.com a spusť `ollama pull gemma3:12b`
+- **OpenRouter** (cloud, platíš za použití): vytvoř klíč a nastav proměnnou prostředí `OPENROUTER_API_KEY`
 
-## Co potřebuješ (když spouštíš ze zdrojáků)
+Doporučeno: NVIDIA GPU (RTX 3060 12 GB a lepší). Přepis je pak výrazně rychlejší.
 
-- Windows 10/11
-- **Python 3.10+** (při instalaci zaškrtni "Add Python to PATH")
-- **ffmpeg** v PATH (např. build z gyan.dev, musí obsahovat libass kvůli titulkům)
-- Jedno z toho pro výběr klipů:
-  - **Ollama** (zdarma, lokálně): nainstaluj z ollama.com a spusť `ollama pull gemma3:12b`
-  - **OpenRouter** (cloud, placené podle použití): vytvoř klíč a nastav proměnnou prostředí `OPENROUTER_API_KEY`
-- Doporučeno: NVIDIA GPU (RTX 3060 12 GB a lepší), přepis je pak rychlejší
-
-## Instalace
-
-1. Dvakrát klikni na `install.bat`.
-2. Spusť `run.bat --check`. Ukáže, co chybí (ffmpeg, GPU, Ollama, klíč).
+Windows může při prvním spuštění ukázat varování SmartScreen, protože aplikace není podepsaná certifikátem. Klikni na *Více informací → Přesto spustit*.
 
 ## Použití
 
-```
-run.bat https://kick.com/.../videos/...        # klipy z VODu s titulky
-run.bat "C:\videa\stream.mp4"                  # lokální soubor
-run.bat --no-captions                          # bez titulků, URL vezme ze settings.yaml
-run.bat --count 10                             # 10 klipů na hodinu materiálu
-```
+1. Vlož URL VODu nebo cestu k lokálnímu videu.
+2. Stiskni **Spustit AI Clipper**.
+3. Hotové klipy najdeš na stránce **Hotové klipy**: skóre, titulek, popis, hashtagy, tlačítka Přehrát, Složka a Kopírovat.
 
-Nebo vyplň `source.url` v `settings.yaml` a spusť `run.bat` bez argumentů.
+Běh má fáze: stažení, přepis, hodnocení AI, střih. Průběh je vidět v logu a v ukazateli. Běh jde kdykoli zrušit.
 
-Výsledek je ve složce `output\<id-videa>\`:
-- `klip_01.mp4`, `klip_02.mp4`, ... (nejlepší je první)
-- `klip_01.srt` (titulky, pokud jsou zapnuté)
-- `klip_01.txt` (titulek, čas ve streamu, skóre, proč AI klip vybrala)
+## Hodnocení kvality
 
-Přepis a výběr klipů se ukládají do `work\`, takže opakované spuštění na stejném videu je rychlé. Chceš-li nový výběr AI, smaž `work\<id>\clips.json`.
+Každý navržený klip dostane skóre 0 až 100 jako vážený průměr těchto kritérií:
+
+| Kritérium | Co měří |
+|-----------|---------|
+| Hook | Zaujme hned v prvních sekundách? |
+| Emoce | Smích, šok, napětí, nadšení |
+| Srozumitelnost | Pochopí ho divák bez znalosti streamu? |
+| Pointa | Končí vtipem nebo vyvrcholením? |
+| Humor | Jak je vtipný? |
+| Tempo | Heuristika z přepisu, ideál 2 až 3,2 slova za sekundu |
+
+Váhy jde nastavit v sekci **Hodnocení kvality**. Práh **Minimální hodnocení** určuje, které klipy se vůbec nevytvoří.
+
+Hodnocení AI se ukládá do cache. Když později změníš práh nebo váhy, výběr se přepočítá bez nového volání AI. Novou AI analýzu vynutíš zaškrtnutím *Znovu zavolat AI*.
 
 ## Nastavení
 
-Všechno je v `settings.yaml` s komentáři u každé položky: délka klipů, počet klipů na hodinu, velikost a barva titulků, model přepisu, Ollama nebo OpenRouter, kvalita videa.
+Všechno je na stránce **Nastavení**, každé pole má popis. Stejné hodnoty jsou v `settings.yaml` s komentáři. Hlavní oblasti:
+
+- **Výběr klipů**: počet na hodinu, délka, práh hodnocení, povolené překrytí
+- **Hodnocení kvality**: váhy jednotlivých kritérií
+- **AI**: Ollama nebo OpenRouter, modely, teplota, kontext, popis kanálu, vlastní pokyny pro AI
+- **Přepis řeči**: model Whisper, zařízení, jazyk, slovník jmen a her
+- **Titulky**: písmo, velikost, barvy, obrys, pozice, velká písmena
+- **Výstup**: rozlišení, FPS, kvalita, složka, název souborů
+- **Cache a úklid**: pracovní složka, co ukládat, automatické mazání, limit velikosti
+
+## Cache a úklid
+
+Stažená videa, přepisy a výběry AI jsou v pracovní složce `work`. Na stránce **Cache a úklid** vidíš, kolik místa zabírají, a můžeš je vyčistit po částech. Tlačítko *Spustit úklid podle nastavení* smaže staré položky a hlídá limit velikosti.
+
+## Příkazová řádka (pro pokročilé)
+
+```
+python clipper.py "https://kick.com/.../videos/..."
+python clipper.py stream.mp4 --no-captions --min-score 70
+python clipper.py --check
+python clipper.py --clean downloads
+```
+
+## Spuštění ze zdrojáků
+
+```
+install.bat          # vytvoří .venv a nainstaluje závislosti
+run.bat              # spustí GUI
+```
+
+Potřebuješ Python 3.10+ a ffmpeg v PATH. Výchozí nastavení se znovu vygeneruje příkazem `python schema.py`.
 
 ## Známá omezení
 
-- Oříznutí 9:16 bere střed záběru. U streamů s kamerou v rohu nebo u dvou lidí vedle sebe může být výřez špatně. Sledování obličeje zatím není.
-- AI vybírá podle řeči. Vtipy, které jsou jen vizuální a nikdo je nekomentuje, nenajde.
-- Stahování z Kicku závisí na yt-dlp. Když přestane fungovat, zkus `pip install -U yt-dlp` (spusť v prostředí `.venv`).
-- Titulky jsou po slovních skupinách podle času segmentů, ne přesně po jednotlivých slovech.
+- Oříznutí 9:16 bere střed záběru. Sledování obličeje zatím není, takže u streamů s kamerou v rohu nebo s více lidmi vedle sebe může být výřez špatně.
+- AI vybírá podle řeči a obrazu jen přes přepis. Vtipy, které jsou jen vizuální a nikdo je nekomentuje, nenajde.
+- Publikování na YouTube a TikTok zatím není. Klipy a popisy jsou připravené ke ručnímu nahrání.
+- Stahování z Kicku závisí na yt-dlp. Když přestane fungovat, zkus aktualizaci yt-dlp, nebo vlož cookies v nastavení.
+- Hodnocení AI je odhad. Skóre 0 až 100 neznamená, že klip bude mít úspěch. Nejlepší výsledky dává ladění vah a pokynů pro AI podle vlastních výsledků.
 
 ## Aktualizace
 
-Tento nástroj se neaktualizuje sám. Nové verze přijdou tím, že se upraví kód v repozitáři (např. přes Claude) a stáhneš je přes `git pull`.
+Nové verze přijdou jako nová Release se `Setup.exe`. Stará verze se přepíše instalací nové.
