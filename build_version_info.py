@@ -1,8 +1,6 @@
 """Generate PyInstaller's Windows VERSIONINFO resource from version.py."""
 
 from __future__ import annotations
-
-import re
 from pathlib import Path
 
 from version import APP_VERSION
