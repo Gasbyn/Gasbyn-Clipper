@@ -21,7 +21,12 @@ from pathlib import Path
 import requests
 import yaml
 
-ROOT = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    # po sestavení do .exe: nastavení a ffmpeg leží vedle EXE
+    ROOT = Path(sys.executable).resolve().parent
+    os.environ["PATH"] = str(ROOT) + os.pathsep + os.environ.get("PATH", "")
+else:
+    ROOT = Path(__file__).resolve().parent
 
 
 # ---------------------------------------------------------------- utilita
