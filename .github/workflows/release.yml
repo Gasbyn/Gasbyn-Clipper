@@ -6,6 +6,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Verze, např. v1.0.1 (Release s tímto tagem se vytvoří na aktuálním commitu main)"
+        required: true
+        default: "v1.0.1"
 
 permissions:
   contents: write
@@ -58,4 +64,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: Output/Setup.exe
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           generate_release_notes: true
