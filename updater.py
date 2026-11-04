@@ -44,17 +44,28 @@ def check_for_update() -> Optional[dict]:
 
 
 def download_installer(url: str, progress: Callable[[float], None] | None = None) -> Path:
+    """Stáhne Setup.exe. Při chybě nebo neúplném souboru ho smaže, aby se nespustil poškozený."""
     dest = Path(tempfile.gettempdir()) / "GasbynClipper-Setup.exe"
-    with requests.get(url, stream=True, timeout=30) as r:
-        r.raise_for_status()
-        total = int(r.headers.get("content-length", 0)) or 1
-        done = 0
-        with open(dest, "wb") as fh:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):
-                fh.write(chunk)
-                done += len(chunk)
-                if progress:
-                    progress(done / total)
+    dest.unlink(missing_ok=True)
+    try:
+        # (připojení, čtení) - čtení je dlouhé kvůli souboru ~115 MB
+        with requests.get(url, stream=True, timeout=(15, 60), allow_redirects=True) as r:
+            r.raise_for_status()
+            expected = int(r.headers.get("content-length", 0))
+            done = 0
+            with open(dest, "wb") as fh:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    fh.write(chunk)
+                    done += len(chunk)
+                    if progress and expected:
+                        progress(min(1.0, done / expected))
+        if expected and done != expected:
+            raise OSError(f"stažení je neúplné ({done} z {expected} B)")
+        if dest.stat().st_size < 1024 * 1024:
+            raise OSError("stažený soubor je příliš malý, pravděpodobně chyba serveru")
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
     return dest
 
 

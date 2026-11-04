@@ -530,7 +530,8 @@ class App(ctk.CTk):
             try:
                 info = updater.check_for_update()
             except Exception as exc:  # noqa: BLE001
-                self.bg_events.put(("upd_error", str(exc)))
+                # Neúspěšná kontrola na pozadí tichá: žádné tlačítko, jen zápis do logu.
+                print(f"Kontrola aktualizací selhala: {exc}")
                 return
             if info:
                 self.bg_events.put(("upd_found", info))
@@ -548,8 +549,16 @@ class App(ctk.CTk):
                     url, progress=lambda f: self.bg_events.put(("upd_progress", f)))
                 self.bg_events.put(("upd_ready", str(path)))
             except Exception as exc:  # noqa: BLE001
-                self.bg_events.put(("upd_error", str(exc)))
+                self.bg_events.put(("upd_error", f"Stažení selhalo: {exc}"))
         threading.Thread(target=job, daemon=True).start()
+
+    def _update_failed(self, message: str) -> None:
+        """Zobrazí skutečnou chybu a nabídne opakování. Tlačítko se ukáže jen u instalace."""
+        print(f"Aktualizace selhala: {message}")
+        self.update_btn.configure(text="Aktualizace selhala, zkusit znovu",
+                                  state="normal", command=self.install_update)
+        self.update_btn.pack(side="bottom", fill="x", padx=20, pady=(0, 8))
+        self.status.configure(text=f"Aktualizace: {message}", text_color=RED)
 
     def _poll_extra(self) -> None:
         try:
@@ -567,12 +576,15 @@ class App(ctk.CTk):
                 elif kind == "upd_progress":
                     self.update_btn.configure(text=f"Stahuji {ev[1] * 100:.0f} %")
                 elif kind == "upd_ready":
-                    updater.install_and_restart(Path(ev[1]))
+                    try:
+                        updater.install_and_restart(Path(ev[1]))
+                    except OSError as exc:
+                        self._update_failed(f"Spuštění instalátoru selhalo: {exc}")
+                        continue
                     self.destroy()
                     return
                 elif kind == "upd_error":
-                    self.update_btn.configure(text="Aktualizace selhala", state="normal")
-                    self.update_btn.pack(side="bottom", fill="x", padx=20, pady=(0, 8))
+                    self._update_failed(ev[1])
                 elif kind == "yt_done":
                     self.yt_status.configure(text=ev[1], text_color=GREEN)
                 elif kind == "yt_error":
