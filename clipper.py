@@ -29,6 +29,12 @@ else:
     ROOT = Path(__file__).resolve().parent
 
 
+def ffmpeg_bin() -> str:
+    """ffmpeg přibalený v instalaci, jinak ffmpeg z PATH."""
+    bundled = ROOT / "ffmpeg" / "ffmpeg.exe"
+    return str(bundled) if bundled.exists() else "ffmpeg"
+
+
 # ---------------------------------------------------------------- utilita
 
 def load_settings(path: Path) -> dict:
@@ -317,7 +323,7 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path, cf
 
     out_file = out_dir / f"{name}.mp4"
     cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error",
         "-ss", f"{clip['start']:.3f}", "-i", str(video),
         "-t", f"{clip['end'] - clip['start']:.3f}",
         "-vf", ",".join(vf),
@@ -371,7 +377,8 @@ def process(source: str, cfg: dict) -> None:
 
 
 def check(cfg: dict) -> None:
-    print("ffmpeg:        ", "OK" if shutil.which("ffmpeg") else "CHYBÍ (přidej do PATH)")
+    found = Path(ffmpeg_bin()).exists() or shutil.which("ffmpeg")
+    print("ffmpeg:        ", "OK" if found else "CHYBÍ (přidej do PATH)")
     print("CUDA (GPU):    ", "ano" if has_cuda() else "ne, poběží na CPU")
     if cfg["ai"]["provider"] == "ollama":
         url = cfg["ai"]["ollama"]["url"].rstrip("/")
@@ -406,10 +413,22 @@ def main() -> None:
         return
 
     source = args.source or cfg["source"]["url"]
+    if not source and sys.stdin.isatty():
+        # spuštěno dvojklikem / ze zástupce: zeptej se na URL
+        source = input("Vlož URL VODu nebo cestu k videu a potvrď Enter: ").strip().strip('"')
     if not source:
         sys.exit("Zadej URL nebo cestu k videu, nebo nastav source.url v settings.yaml.")
     process(source, cfg)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit as exc:
+        if getattr(sys, "frozen", False) and exc.code not in (0, None):
+            print(f"\nChyba: {exc.code}")
+        if getattr(sys, "frozen", False):
+            input("\nStiskni Enter pro zavření...")
+        raise
+    if getattr(sys, "frozen", False):
+        input("\nHotovo. Stiskni Enter pro zavření...")

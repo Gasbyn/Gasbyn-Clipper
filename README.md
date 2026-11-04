@@ -2,7 +2,17 @@
 
 Vlastní nástroj pro Windows: vezme VOD z Kicku (nebo YouTube, nebo lokální video), AI najde nejlepší momenty a vystřihne z nich vertikální klipy 9:16, volitelně s titulky.
 
-## Co potřebuješ
+## Nejjednodušší instalace (Windows 10/11)
+
+1. Otevři stránku **Releases** tohoto repozitáře a stáhni `Setup.exe`.
+2. Spusť ho a projdi průvodce. Instaluje se jen pro tebe, správce není potřeba.
+3. Spusť **Gasbyn Clipper** ze zástupce, vlož URL VODu a potvrď Enter.
+
+Součástí instalace je ffmpeg. Přepis (Whisper) si při prvním spuštění stáhne model, takže je potřeba internet. Pro výběr klipů potřebuješ ještě Ollamu, nebo OpenRouter klíč (viz níže).
+
+Windows může při prvním spuštění ukázat varování SmartScreen (aplikace není podepsaná certifikátem). Klikni na *Více informací → Přesto spustit*.
+
+## Co potřebuješ (když spouštíš ze zdrojáků)
 
 - Windows 10/11
 - **Python 3.10+** (při instalaci zaškrtni "Add Python to PATH")

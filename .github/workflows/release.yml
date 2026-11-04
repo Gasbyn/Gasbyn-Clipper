@@ -1,10 +1,11 @@
 name: Release
 
+# Při pushnutí tagu v1.2.3 se na Windows runneru sestaví aplikace a Setup.exe
+# se připojí k GitHub Release s tímto tagem.
 on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,49 +14,48 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
 
-      - name: Install ffmpeg
-        run: choco install ffmpeg -y --no-progress
-
-      - name: Build app with PyInstaller
+      - name: Download ffmpeg
+        shell: pwsh
         run: |
-          pyinstaller --noconfirm --onedir --console --name GasbynClipper `
-            --collect-all faster_whisper --collect-all ctranslate2 --collect-all yt_dlp `
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_tmp -Force
+          $bin = Get-ChildItem ffmpeg_tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path ffmpeg_pkg | Out-Null
+          Copy-Item $bin.FullName ffmpeg_pkg\ffmpeg.exe
+
+      - name: Build application
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --onedir --name GasbynClipper `
+            --collect-all yt_dlp --collect-all faster_whisper --collect-all ctranslate2 `
             clipper.py
-
-      - name: Copy settings and ffmpeg next to the exe
-        shell: pwsh
-        run: |
           Copy-Item settings.yaml dist\GasbynClipper\
-          $ff = (Get-Command ffmpeg).Source
-          Copy-Item $ff dist\GasbynClipper\
-          $ffprobe = Join-Path (Split-Path $ff) "ffprobe.exe"
-          if (Test-Path $ffprobe) { Copy-Item $ffprobe dist\GasbynClipper\ }
+          New-Item -ItemType Directory -Force -Path dist\GasbynClipper\ffmpeg | Out-Null
+          Copy-Item ffmpeg_pkg\ffmpeg.exe dist\GasbynClipper\ffmpeg\
 
-      - name: Install Inno Setup
-        run: choco install innosetup -y --no-progress
-
-      - name: Build Setup.exe
+      - name: Build installer
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
-          if (-not $version) { $version = "0.0.0" }
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          & $iscc "/DAppVersion=$version" installer.iss
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          if (-not (Test-Path Output\Setup.exe)) { throw "Setup.exe nebyl vytvořen" }
 
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish release with Setup.exe
         uses: softprops/action-gh-release@v2
         with:
-          files: installer/Setup.exe
+          files: Output/Setup.exe
           generate_release_notes: true
