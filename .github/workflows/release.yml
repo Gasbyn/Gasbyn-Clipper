@@ -37,7 +37,17 @@ jobs:
       - name: Download ffmpeg
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip
+          $ok = $false
+          for ($i = 1; $i -le 5 -and -not $ok; $i++) {
+            try {
+              Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip -UseBasicParsing
+              $ok = $true
+            } catch {
+              Write-Host "Pokus $i selhal, čekám 30 s..."
+              Start-Sleep -Seconds 30
+            }
+          }
+          if (-not $ok) { throw "ffmpeg se nepodařilo stáhnout" }
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_tmp -Force
           $bin = Get-ChildItem ffmpeg_tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           New-Item -ItemType Directory -Force -Path ffmpeg_pkg | Out-Null
