@@ -122,7 +122,7 @@ jobs:
       - name: Verify installer metadata
         shell: pwsh
         run: |
-          $info = (Get-Item Output\\Setup.exe).VersionInfo
+          $info = (Get-Item Output\Setup.exe).VersionInfo
           $checks = @{
             CompanyName = 'Gasbyn'
             ProductName = 'Gasbyn Clipper'
