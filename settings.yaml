@@ -1,0 +1,47 @@
+# Gasbyn Clipper - nastavení
+# Po změně stačí znovu spustit run.bat, není potřeba nic kompilovat.
+
+source:
+  url: ""                    # URL VODu (Kick, YouTube) nebo cesta k lokálnímu souboru; jde přepsat argumentem
+
+download:
+  max_height: 1080           # nejvyšší kvalita staženého videa
+
+clips:
+  count_per_hour: 6          # zhruba kolik klipů chceš na hodinu materiálu
+  min_seconds: 20            # nejkratší klip
+  max_seconds: 60            # nejdelší klip
+
+captions:
+  enabled: true              # false = klipy bez titulků (lze též --no-captions)
+  font: Arial
+  font_size: 60              # velikost na výšce 1920 px, typicky 50-70
+  text_color: "&H00FFFFFF"   # formát ASS: &HAABBGGRR, &H00FFFFFF = bílá
+  outline_width: 4           # tloušťka obrysu písma
+  margin_bottom: 350         # odsazení od spodního okraje v px
+  words_per_caption: 4       # kolik slov je v jednom titulku
+
+transcription:
+  model: large-v3-turbo      # tiny, base, small, medium, large-v3, large-v3-turbo
+  device: auto               # auto | cuda | cpu
+  language: auto             # auto, nebo kód jazyka např. cs, en
+
+ai:
+  provider: ollama           # ollama (lokálně, zdarma) | openrouter (cloud, platíš za použití)
+  chunk_minutes: 30          # přepis se AI posílá po kouscích tohoto délky
+  ollama:
+    url: http://localhost:11434
+    model: gemma3:12b        # např. ollama pull gemma3:12b
+    num_ctx: 16384
+  openrouter:
+    api_key_env: OPENROUTER_API_KEY   # název proměnné prostředí s klíčem
+    model: google/gemma-3-27b-it
+
+output:
+  width: 1080
+  height: 1920
+  crf: 20                    # nižší = lepší kvalita, větší soubor
+  preset: veryfast           # rychlost kódování (ultrafast ... slow)
+
+work_dir: work               # dočasné soubory, stažená videa, přepisy
+output_dir: output           # hotové klipy
