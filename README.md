@@ -8,20 +8,44 @@ AI klipovač pro Windows. Vezme VOD z Kicku (nebo YouTube, nebo lokální video)
 2. Spusť ho a projdi průvodce. Instaluje se jen pro tebe, správce není potřeba.
 3. Spusť **Gasbyn Clipper** ze zástupce.
 
-V instalaci je ffmpeg. Při prvním přepisu se stáhne model Whisper, takže je potřeba internet.
+### Co je v Setup.exe a co chybí (Ready to Use)
 
-Pro výběr klipů potřebuješ jedno z toho:
-- **Ollama** (zdarma, běží lokálně): nainstaluj z ollama.com a spusť `ollama pull gemma3:12b`
-- **OpenRouter** (cloud, platíš za použití): vytvoř klíč a nastav proměnnou prostředí `OPENROUTER_API_KEY`
+Instalace obsahuje aplikaci, ffmpeg a všechny knihovny Pythonu. **Nevkládá** tyto tři věci, protože jsou velké a patří k tvému počítači:
+
+| Co | Jak se to získá | Kde to vidíš |
+|----|-----------------|--------------|
+| Ollama (AI běžící lokálně) | Aplikace ji nabídne stažením z ollama.com | Karta **Připravenost** na první stránce |
+| Model AI (`gemma3:12b`, několik GB) | Tlačítko **Stáhnout model** v kartě | Karta **Připravenost** |
+| Přepisovací model Whisper (stovky MB až ~1,6 GB) | Tlačítko **Stáhnout Whisper**, jinak se stáhne při prvním přepisu | Karta **Připravenost** |
+
+Po stažení Setup.exe tedy otevři aplikaci, na první stránce projdi kartu **Připravenost** a klikni na chybějící kroky. Když jsou všechny zelené, je hotovo. Potřebuješ internet a jednorázově pár GB místa.
+
+Alternativa místo Ollamy: **OpenRouter** (cloud, platíš za použití). Vytvoř klíč a nastav proměnnou prostředí `OPENROUTER_API_KEY`, pak v Nastavení vyber poskytovatele *openrouter*.
 
 Doporučeno: NVIDIA GPU (RTX 3060 12 GB a lepší). Přepis je pak výrazně rychlejší.
 
 ## Použití
 
-1. Vlož URL VODu nebo cestu k lokálnímu videu.
+1. Vlož URL VODu nebo cestu k lokálnímu videu. Více zdrojů oddělíš středníkem `;`, zpracují se jeden po druhém.
 2. Stiskni **Spustit AI Clipper**.
-3. Hotové klipy najdeš na stránce **Hotové klipy**: skóre, titulek, popis, hashtagy.
+3. Sleduj ukazatele: **Celkem %** přes celou frontu, **Odhad** zbývajícího času a řádek **Právě** s procenty aktuálního kroku (stahování, přepis, hodnocení AI, střih).
+4. Hotové klipy najdeš na stránce **Hotové klipy**: skóre, titulek, popis, hashtagy.
    Tlačítko **Upravit** otevře editor, **Přehrát** otevře klip ve výchozím přehrávači.
+   Pod každým klipem jsou tlačítka **👍 Líbí se** a **👎 Nelíbí**, ze kterých se AI učí (viz níže).
+
+### Typy obsahu a prioritka rychlosti
+
+V Nastavení v sekci **Výběr klipů** zvol **Typ obsahu**:
+- **shorts**: obecné krátké klipy 20 až 60 s (výchozí)
+- **gaming**: hraní, důraz na emoce a reakce, 25 až 90 s
+- **vlog**: povídání a příběhy, důraz na srozumitelnost, 30 až 75 s
+- **long_form**: delší klipy 60 až 180 s, důraz na pointu
+
+V sekci **AI** je **Priorita rychlosti**: *rychlé* použije menší přepis a kratší kontext (o něco nižší přesnost), *vyvážené* je výchozí, *kvalitní* je nejpřesnější a nejpomalejší.
+
+### Učení z hodnocení
+
+Každý klip označený 👍 nebo 👎 se uloží do `work/learning.json`. Při dalším hodnocení AI dostane několik nedávných příkladů (počet nastavíš v sekci **Učení z hodnocení**), takže se příště trefuje do tvého stylu. Učení můžeš vypnout v Nastavení.
 
 ## Hodnocení kvality
 
@@ -47,9 +71,11 @@ Na stránce **Hotové klipy** klikni na **Upravit**. Editor obsahuje:
 - **Časovou osu**: táhni oranžové uchyty a zkrať klip zleva i zprava. Klikni na titulek a zvýrazní se.
 - **Seznam titulků**: uprav čas a text, smaž, nebo přidej nový titulek.
 - **Název, popis a hashtagy**: upravíš je před nahráním.
+- **Animace na začátku**: *Fade in*, *Unblur in* (rozostřený začátek, který se vyostří) nebo *Třes* (otřes jen na začátku, pak klid). Délku nastavíš v sekundách.
+- **Fotka**: vlož obrázek (PNG, JPG, WebP), nastav polohu X a Y, velikost a v jakém čase se má zobrazovat (od–do, 0 = do konce klipu).
 - **Uložit a přerenderovat**: vytvoří klip znovu se změnami. Když zdrojové video zmizelo z cache, stáhne se znovu.
 
-Editor je jednodušší než CapCut. Náhled se přehraje v systémovém přehrávači a klip jde jen zkrátit, ne prodloužit nad původní okno.
+Editor je jednodušší než CapCut. Náhled se přehraje v systémovém přehrávači (ne uvnitř aplikace), klip jde jen zkrátit a animace se dají dát jen na začátek.
 
 ## Nahrání na YouTube
 
@@ -115,3 +141,5 @@ Potřebuješ Python 3.10+ a ffmpeg v PATH. Výchozí nastavení se znovu vygener
 - Stahování z Kicku závisí na yt-dlp. Když přestane fungovat, zkus aktualizaci yt-dlp, nebo vlož cookies v nastavení.
 - Hodnocení AI je odhad. Skóre 0 až 100 neznamená, že klip bude mít úspěch.
 - Editor nemá vestavěný náhled videa a nelze v něm klip prodloužit.
+- Ollama a model AI instalační program nezabalí. Stahují se z oficiálních zdrojů až při prvním spuštění, takže bez internetu nejde klipovat.
+- Odhad času je jen odhad z dosavadního tempa a při prvním běhu (stahování modelů) bývá méně přesný.

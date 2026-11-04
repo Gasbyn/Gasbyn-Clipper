@@ -23,8 +23,12 @@ import updater
 import youtube
 from editor import EditorPage
 from version import APP_VERSION
+import time
+
 from core import (Reporter, Cancelled, run_job, clean_cache, cache_report,
-                  auto_clean, check_environment, load_or_default, save, ROOT)
+                  auto_clean, check_environment, load_or_default, save, ROOT,
+                  record_feedback, setup_status, pull_ollama_model, prefetch_whisper,
+                  OLLAMA_INSTALLER_URL)
 from schema import SECTIONS, default_settings, _coerce
 
 # barvy z GasbynOptimizeru (MainWindow.xaml)
@@ -68,6 +72,15 @@ def fmt_size(n: float) -> str:
     return f"{n:.1f} TB"
 
 
+def fmt_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min {seconds % 60:02d} s"
+    return f"{seconds // 3600} h {(seconds % 3600) // 60:02d} min"
+
+
 def score_color(score: float) -> str:
     if score >= 75:
         return GREEN
@@ -94,6 +107,11 @@ class App(ctk.CTk):
         self.setting_widgets: dict[tuple[str, str], tuple] = {}
         self.bg_events: queue.Queue = queue.Queue()
         self._update_info: dict | None = None
+        # fronta zdrojů: index právě běžícího, počet, čas začátku (pro ETA)
+        self._queue_idx = 0
+        self._queue_total = 1
+        self._queue_t0: float | None = None
+        self._queue_frac = 0.0
 
         self._build_sidebar()
         self.content = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
@@ -179,6 +197,8 @@ class App(ctk.CTk):
                     "Vlož URL VODu nebo cestu k videu. AI najde momenty, každému dá hodnocení 0 až 100 "
                     "a vystřihne vertikální klipy. Klipy pod nastaveným prahem se nevytvoří.")
 
+        self._build_setup_card(page)
+
         card = self._card(page)
         card.pack(fill="x")
         inner = ctk.CTkFrame(card, fg_color="transparent")
@@ -189,7 +209,7 @@ class App(ctk.CTk):
         self.url_var = ctk.StringVar(value=self.cfg["source"]["url"])
         ctk.CTkEntry(row, textvariable=self.url_var, height=40, corner_radius=9,
                      fg_color=INPUT, border_color=BORDER, text_color=TEXT, font=fnt(12),
-                     placeholder_text="https://kick.com/…/videos/…  nebo  C:\\videa\\stream.mp4"
+                     placeholder_text="URL nebo cesta; více oddělených středníkem ; se zpracuje postupně"
                      ).pack(side="left", fill="x", expand=True)
         self.start_btn = ctk.CTkButton(
             row, text="Spustit AI Clipper", height=40, corner_radius=9, fg_color=ORANGE,
@@ -217,6 +237,13 @@ class App(ctk.CTk):
                                            height=8, corner_radius=4)
         self.progress.set(0)
         self.progress.pack(fill="x", pady=(18, 6))
+        stats =ctk.CTkFrame(inner, fg_color="transparent")
+        stats.pack(fill="x")
+        self.overall_label = ctk.CTkLabel(stats, text="Celkem 0 %", font=fnt(12, True),
+                                          text_color=TEXT, anchor="w")
+        self.overall_label.pack(side="left")
+        self.eta_label = ctk.CTkLabel(stats, text="", font=fnt(11), text_color=MUTED, anchor="e")
+        self.eta_label.pack(side="right")
         self.status = ctk.CTkLabel(inner, text="Připraveno", font=fnt(11), text_color=MUTED,
                                    anchor="w")
         self.status.pack(fill="x")
@@ -235,8 +262,8 @@ class App(ctk.CTk):
         self.log_box.configure(state="disabled")
 
     def start(self) -> None:
-        src = self.url_var.get().strip()
-        if not src:
+        sources = [s.strip() for s in self.url_var.get().split(";") if s.strip()]
+        if not sources:
             self.status.configure(text="Vlož URL nebo cestu k videu.", text_color=RED)
             return
         if self.worker and self.worker.is_alive():
@@ -254,22 +281,33 @@ class App(ctk.CTk):
         self.log_box.delete("1.0", "end")
         self.log_box.configure(state="disabled")
         self.progress.set(0)
+        self._queue_total = len(sources)
+        self._queue_idx = 0
+        self._queue_frac = 0.0
+        self._queue_t0 = time.time()
+        self._update_overall(0.0)
         self.status.configure(text="Spouštím…", text_color=MUTED)
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
-        self.worker = threading.Thread(target=self._work, args=(src, cfg, rep, kwargs),
+        self.worker = threading.Thread(target=self._work, args=(sources, cfg, rep, kwargs),
                                        daemon=True)
         self.worker.start()
 
-    def _work(self, src: str, cfg: dict, rep: Reporter, kwargs: dict) -> None:
-        try:
-            result = run_job(src, cfg, rep, **kwargs)
-            self.events.put(("done", result))
-        except Cancelled as exc:
-            self.events.put(("cancelled", str(exc)))
-        except Exception as exc:  # noqa: BLE001 - chceme ukázat chybu uživateli
-            self.events.put(("error", f"{exc}"))
-            self.events.put(("log", traceback.format_exc()))
+    def _work(self, sources: list[str], cfg: dict, rep: Reporter, kwargs: dict) -> None:
+        # Zdroje se zpracují postupně, aby běžel jen jeden přepis a jedno ffmpeg.
+        for i, src in enumerate(sources):
+            self.events.put(("queue", i, len(sources)))
+            try:
+                result = run_job(src, cfg, rep, **kwargs)
+                self.events.put(("job_done", result))
+            except Cancelled as exc:
+                self.events.put(("cancelled", str(exc)))
+                return
+            except Exception as exc:  # noqa: BLE001 - chceme ukázat chybu uživateli
+                self.events.put(("log", f"Zdroj {src} selhal: {exc}"))
+                self.events.put(("log", traceback.format_exc()))
+                self.events.put(("error", f"{exc}"))
+        self.events.put(("all_done", len(sources)))
 
     def cancel(self) -> None:
         if self.cancel_event:
@@ -280,6 +318,21 @@ class App(ctk.CTk):
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
 
+    def _update_overall(self, frac_current: float) -> None:
+        """Celkový % přes všechny zdroje ve frontě + odhad zbývajícího času."""
+        total = max(1, self._queue_total)
+        overall = min(1.0, (self._queue_idx + frac_current) / total)
+        self.progress.set(overall)
+        self.overall_label.configure(text=f"Celkem {overall * 100:.0f} %"
+                                          + (f"  ·  zdroj {self._queue_idx + 1}/{total}"
+                                             if total > 1 else ""))
+        eta = ""
+        if self._queue_t0 and overall > 0.02:
+            elapsed = time.time() - self._queue_t0
+            remaining = elapsed * (1 - overall) / overall
+            eta = f"Odhad: zbývá {fmt_duration(remaining)}"
+        self.eta_label.configure(text=eta)
+
     def _poll_events(self) -> None:
         try:
             while True:
@@ -287,28 +340,181 @@ class App(ctk.CTk):
                 kind = ev[0]
                 if kind == "log":
                     self._append_log(ev[1])
+                elif kind == "queue":
+                    self._queue_idx = ev[1]
+                    self._queue_total = ev[2]
+                    self._queue_frac = 0.0
+                    self._update_overall(0.0)
                 elif kind == "progress":
-                    self.progress.set(ev[1])
+                    self._queue_frac = ev[1]
+                    self._update_overall(ev[1])
                     if ev[2]:
-                        self.status.configure(text=ev[2], text_color=MUTED)
-                elif kind == "done":
-                    self._finish_worker_ui()
+                        self.status.configure(text=f"Právě: {ev[2]}", text_color=MUTED)
+                elif kind == "job_done":
                     result = ev[1]
-                    n = len(result["clips"])
-                    self.progress.set(1)
-                    self.status.configure(text=f"Hotovo: {n} klipů", text_color=GREEN)
                     self._selected_folder = result["out_dir"]
+                    self.status.configure(text=f"Hotovo: {len(result['clips'])} klipů",
+                                          text_color=GREEN)
                     if self.cfg["output"]["open_folder_after"]:
                         open_path(result["out_dir"])
+                elif kind == "all_done":
+                    self._finish_worker_ui()
+                    self._update_overall(1.0)
+                    self.eta_label.configure(text="")
+                    self.status.configure(text=f"Fronta hotová ({ev[1]} zdrojů)",
+                                          text_color=GREEN)
+                    self.refresh_results_list()
                 elif kind == "cancelled":
                     self._finish_worker_ui()
                     self.status.configure(text=ev[1], text_color=YELLOW)
                 elif kind == "error":
-                    self._finish_worker_ui()
                     self.status.configure(text=f"Chyba: {ev[1]}", text_color=RED)
+                elif kind == "setup_log":
+                    self._append_log(ev[1])
+                elif kind == "setup_progress":
+                    self.setup_bar.set(ev[1])
+                    if ev[2]:
+                        self.setup_status.configure(text=ev[2])
+                elif kind == "setup_done":
+                    self._setup_busy(False)
+                    self.refresh_setup()
+                elif kind == "setup_error":
+                    self._setup_busy(False)
+                    self.setup_status.configure(text=f"Chyba: {ev[1]}", text_color=RED)
+                    self.refresh_setup()
         except queue.Empty:
             pass
         self.after(100, self._poll_events)
+
+    # ------------------------------------------------------------ první spuštění
+
+    def _build_setup_card(self, page) -> None:
+        self.setup_card = self._card(page)
+        self.setup_card.pack(fill="x", pady=(0, 14))
+        inner = ctk.CTkFrame(self.setup_card, fg_color="transparent")
+        inner.pack(fill="x", padx=20, pady=16)
+        head = ctk.CTkFrame(inner, fg_color="transparent")
+        head.pack(fill="x")
+        ctk.CTkLabel(head, text="Připravenost k použití", font=fnt(13, True), text_color=TEXT
+                     ).pack(side="left")
+        self.setup_summary = ctk.CTkLabel(head, text="", font=fnt(11), text_color=MUTED)
+        self.setup_summary.pack(side="left", padx=(12, 0))
+        self.setup_rows = ctk.CTkFrame(inner, fg_color="transparent")
+        self.setup_rows.pack(fill="x", pady=(8, 0))
+        self.setup_bar = ctk.CTkProgressBar(inner, progress_color=ORANGE, fg_color=INPUT,
+                                            height=6, corner_radius=3)
+        self.setup_bar.set(0)
+        self.setup_status = ctk.CTkLabel(inner, text="", font=fnt(11), text_color=MUTED, anchor="w")
+        self.setup_status.pack(fill="x")
+        self.after(300, self.refresh_setup)
+
+    def _setup_busy(self, busy: bool) -> None:
+        for btn in getattr(self, "_setup_buttons", []):
+            btn.configure(state="disabled" if busy else "normal")
+
+    def refresh_setup(self) -> None:
+        """Projde stav a vykreslí řádky s tlačítky pro to, co chybí."""
+        for w in self.setup_rows.winfo_children():
+            w.destroy()
+        self._setup_buttons: list = []
+        self.setup_status.configure(text="")
+        self.setup_bar.pack_forget()
+        st = setup_status(self.cfg)
+        ok_all = st["ffmpeg"] and (st["model_ready"] or st["provider"] == "openrouter")
+        self.setup_summary.configure(
+            text="Hotovo, můžeš klipovat." if ok_all else "Chybí pár kroků, viz níže.",
+            text_color=GREEN if ok_all else YELLOW)
+
+        def row(label: str, ok: bool, button: str | None = None, action=None) -> None:
+            line = ctk.CTkFrame(self.setup_rows, fg_color="transparent")
+            line.pack(fill="x", pady=2)
+            ctk.CTkLabel(line, text=("✓  " if ok else "○  ") + label, font=fnt(12),
+                         text_color=GREEN if ok else TEXT, anchor="w").pack(side="left")
+            if not ok and button and action:
+                b = ctk.CTkButton(line, text=button, height=28, corner_radius=8, fg_color=ORANGE,
+                                  hover_color=ORANGE_LIGHT, font=fnt(11, True),
+                                  command=action)
+                b.pack(side="right")
+                self._setup_buttons.append(b)
+
+        row("ffmpeg (součástí instalace)", st["ffmpeg"])
+        if st["provider"] == "ollama":
+            row("Ollama běží", st["ollama_running"],
+                "Stáhnout a nainstalovat Ollamu" if not st["ollama_installed"] else "Spustit Ollamu",
+                self.setup_install_ollama)
+            row(f"Model {self.cfg['ai']['ollama_model']} stažen", st["model_ready"],
+                "Stáhnout model", self.setup_pull_model)
+        else:
+            row("OpenRouter klíč v proměnné prostředí", bool(os.environ.get(
+                self.cfg["ai"]["openrouter_api_key_env"])))
+        row("Přepisovací model Whisper", self._whisper_cached(),
+            "Stáhnout Whisper", self.setup_prefetch_whisper)
+        self.setup_bar.pack(fill="x", pady=(8, 0))
+        self.setup_bar.set(0)
+
+    def _whisper_cached(self) -> bool:
+        # faster-whisper ukládá modely do cache Hugging Face; hrubá kontrola podle složky
+        name = self.cfg["transcription"]["model"]
+        hub = Path(os.environ.get("USERPROFILE", str(Path.home()))) / ".cache" / "huggingface" / "hub"
+        return hub.exists() and any(name in p.name for p in hub.iterdir())
+
+    def _run_setup(self, fn) -> None:
+        self._setup_busy(True)
+        rep = Reporter(
+            log=lambda m: self.events.put(("setup_log", m)),
+            progress=lambda f, t: self.events.put(("setup_progress", f, t)),
+        )
+
+        def job() -> None:
+            try:
+                fn(rep)
+                self.events.put(("setup_done",))
+            except Exception as exc:  # noqa: BLE001
+                self.events.put(("setup_error", str(exc)))
+        threading.Thread(target=job, daemon=True).start()
+
+    def setup_install_ollama(self) -> None:
+        def fn(rep: Reporter) -> None:
+            if core.ollama_installed():
+                rep.log("Ollama je nainstalovaná, spouštím ji ...")
+                exe = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe"
+                subprocess.Popen([str(exe) if exe.exists() else "ollama", "serve"],
+                                 creationflags=0x08000000)  # CREATE_NO_WINDOW
+                time.sleep(3)
+                return
+            rep.log("Stahuji instalátor Ollamy (oficiální stránka ollama.com) ...")
+            import requests as rq
+            target = Path(os.environ.get("TEMP", ".")) / "OllamaSetup.exe"
+            with rq.get(OLLAMA_INSTALLER_URL, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                total = int(r.headers.get("content-length", 0)) or None
+                done = 0
+                with open(target, "wb") as f:
+                    for chunk in r.iter_content(1 << 20):
+                        f.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            rep.progress(done / total, f"Stahuji Ollamu {done / total * 100:.0f} %")
+            rep.log("Spouštím instalátor Ollamy. Po dokončení se vrať sem a klikni Obnovit.")
+            subprocess.Popen([str(target)])
+
+        self._run_setup(fn)
+
+    def setup_pull_model(self) -> None:
+        self._run_setup(lambda rep: pull_ollama_model(self.cfg, rep))
+
+    def setup_prefetch_whisper(self) -> None:
+        self._run_setup(lambda rep: prefetch_whisper(self.cfg, rep))
+
+    # ------------------------------------------------------------ hodnocení klipů
+
+    def _feedback(self, folder: Path, clip: dict, good: bool, btn_row) -> None:
+        record_feedback(self.cfg, clip, good)
+        for w in btn_row.winfo_children():
+            w.configure(state="disabled")
+        self.status.configure(
+            text="Díky, příště AI přihlédne k tomuto hodnocení." if good
+            else "Díky, příště se AI tomuto stylu vyhne.", text_color=GREEN)
 
     # ------------------------------------------------------------ editor, aktualizace, YouTube
 
@@ -511,6 +717,18 @@ class App(ctk.CTk):
         ctk.CTkButton(btns, text="Upravit", width=90, height=30, corner_radius=8, fg_color=INPUT,
                       hover_color=BORDER, text_color=ORANGE_LIGHT, font=fnt(11, True),
                       command=lambda f=folder, n=clip.get("file", ""): self.open_editor(f, n)
+                      ).pack(side="left", padx=(6, 0))
+
+        # Hodnocení pro učení AI (👍 / 👎)
+        fb = ctk.CTkFrame(right, fg_color="transparent")
+        fb.pack(anchor="e", pady=(8, 0))
+        ctk.CTkButton(fb, text="👍 Líbí se", width=90, height=28, corner_radius=8, fg_color=INPUT,
+                      hover_color=BORDER, text_color=GREEN, font=fnt(11),
+                      command=lambda c=clip, f=folder, r=fb: self._feedback(f, c, True, r)
+                      ).pack(side="left")
+        ctk.CTkButton(fb, text="👎 Nelíbí", width=90, height=28, corner_radius=8, fg_color=INPUT,
+                      hover_color=BORDER, text_color=RED, font=fnt(11),
+                      command=lambda c=clip, f=folder, r=fb: self._feedback(f, c, False, r)
                       ).pack(side="left", padx=(6, 0))
 
     def _copy_meta(self, clip: dict) -> None:

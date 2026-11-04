@@ -16,9 +16,15 @@ from pathlib import Path
 from typing import Callable
 
 import customtkinter as ctk
+from tkinter import filedialog
 
 import youtube
-from core import (Reporter, Cancelled, ROOT, get_source, parse_srt, render_clip)
+from core import (Reporter, Cancelled, ROOT, get_source, parse_srt, render_clip,
+                  default_effects)
+
+INTRO_LABELS = {"none": "Žádná", "fade": "Fade in", "unblur": "Unblur in",
+                "shake": "Třes (jen na začátku)"}
+INTRO_KEYS = {v: k for k, v in INTRO_LABELS.items()}
 
 BG = "#08090B"
 PANEL = "#121419"
@@ -103,8 +109,8 @@ class EditorPage(ctk.CTkFrame):
                             corner_radius=14, width=320)
         left.pack(side="left", fill="y", padx=(0, 14))
         left.pack_propagate(False)
-        inner = ctk.CTkFrame(left, fg_color="transparent")
-        inner.pack(fill="both", expand=True, padx=16, pady=16)
+        inner = ctk.CTkScrollableFrame(left, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=4, pady=4)
         ctk.CTkLabel(inner, text="Název", font=_fnt(11, True), text_color=MUTED).pack(anchor="w")
         self.title_var = ctk.StringVar()
         ctk.CTkEntry(inner, textvariable=self.title_var, height=34, corner_radius=8,
@@ -127,6 +133,53 @@ class EditorPage(ctk.CTkFrame):
         ctk.CTkButton(inner, text="Vrátit původní délku", height=32, corner_radius=8,
                       fg_color=INPUT, hover_color=BORDER, text_color=TEXT, font=_fnt(11),
                       command=self.reset_trim).pack(fill="x", pady=(10, 0))
+
+        # animace na začátku a vložená fotka
+        ctk.CTkLabel(inner, text="Animace na začátku", font=_fnt(11, True),
+                     text_color=MUTED).pack(anchor="w", pady=(18, 4))
+        self.fx_intro_var = ctk.StringVar(value=INTRO_LABELS["none"])
+        ctk.CTkOptionMenu(inner, variable=self.fx_intro_var, values=list(INTRO_LABELS.values()),
+                          height=32, corner_radius=8, fg_color=INPUT, button_color=BORDER,
+                          button_hover_color=BLOCK, dropdown_fg_color=PANEL, text_color=TEXT,
+                          font=_fnt(11)).pack(fill="x")
+        secs_row = ctk.CTkFrame(inner, fg_color="transparent")
+        secs_row.pack(fill="x", pady=(6, 0))
+        ctk.CTkLabel(secs_row, text="Délka (s)", font=_fnt(11), text_color=MUTED).pack(side="left")
+        self.fx_secs_var = ctk.StringVar(value="0.6")
+        ctk.CTkEntry(secs_row, textvariable=self.fx_secs_var, width=80, height=28, corner_radius=8,
+                     fg_color=INPUT, border_color=BORDER, text_color=TEXT, font=_fnt(11)
+                     ).pack(side="right")
+
+        ctk.CTkLabel(inner, text="Fotka", font=_fnt(11, True), text_color=MUTED
+                     ).pack(anchor="w", pady=(18, 4))
+        self.image_path = ""
+        self.img_label = ctk.CTkLabel(inner, text="Žádná fotka", font=_fnt(11), text_color=MUTED,
+                                      anchor="w", justify="left", wraplength=280)
+        self.img_label.pack(fill="x")
+        img_btns = ctk.CTkFrame(inner, fg_color="transparent")
+        img_btns.pack(fill="x", pady=(6, 0))
+        ctk.CTkButton(img_btns, text="Vložit fotku…", height=30, corner_radius=8, fg_color=INPUT,
+                      hover_color=BORDER, text_color=ORANGE_LIGHT, font=_fnt(11, True),
+                      command=self.pick_image).pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(img_btns, text="Odebrat", width=80, height=30, corner_radius=8, fg_color=INPUT,
+                      hover_color=BORDER, text_color=RED, font=_fnt(11),
+                      command=self.clear_image).pack(side="left", padx=(6, 0))
+
+        self.fx_x = self._slider(inner, "Poloha X", 0.5, 0.0, 1.0)
+        self.fx_y = self._slider(inner, "Poloha Y", 0.4, 0.0, 1.0)
+        self.fx_scale = self._slider(inner, "Velikost", 0.3, 0.05, 1.0)
+        times = ctk.CTkFrame(inner, fg_color="transparent")
+        times.pack(fill="x", pady=(8, 0))
+        ctk.CTkLabel(times, text="Fotka od (s)", font=_fnt(11), text_color=MUTED).pack(side="left")
+        self.fx_img_from = ctk.StringVar(value="0")
+        ctk.CTkEntry(times, textvariable=self.fx_img_from, width=60, height=28, corner_radius=8,
+                     fg_color=INPUT, border_color=BORDER, text_color=TEXT, font=_fnt(11)
+                     ).pack(side="left", padx=(6, 10))
+        ctk.CTkLabel(times, text="do (s, 0 = konec)", font=_fnt(11), text_color=MUTED).pack(side="left")
+        self.fx_img_to = ctk.StringVar(value="0")
+        ctk.CTkEntry(times, textvariable=self.fx_img_to, width=60, height=28, corner_radius=8,
+                     fg_color=INPUT, border_color=BORDER, text_color=TEXT, font=_fnt(11)
+                     ).pack(side="left", padx=(6, 0))
 
         # pravý sloupec: časová osa a titulky
         right = ctk.CTkFrame(body, fg_color="transparent")
@@ -175,6 +228,7 @@ class EditorPage(ctk.CTkFrame):
         self.desc_box.delete("1.0", "end")
         self.desc_box.insert("1.0", clip.get("description", ""))
         self.tags_var.set(" ".join(clip.get("hashtags", [])))
+        self._load_fx(clip.get("effects") or {})
         self.selected = None
         self._rebuild_rows()
         self._redraw()
@@ -352,6 +406,74 @@ class EditorPage(ctk.CTkFrame):
 
     # ------------------------------------------------------------ stav a úlohy
 
+    # ------------------------------------------------------------ animace a fotka
+
+    def _slider(self, parent, label: str, value: float, lo: float, hi: float) -> ctk.DoubleVar:
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=(8, 0))
+        head = ctk.CTkFrame(row, fg_color="transparent")
+        head.pack(fill="x")
+        ctk.CTkLabel(head, text=label, font=_fnt(11), text_color=MUTED).pack(side="left")
+        shown = ctk.CTkLabel(head, text="", font=_fnt(11), text_color=TEXT)
+        shown.pack(side="right")
+        var = ctk.DoubleVar(value=value)
+
+        def update(_value=None) -> None:
+            shown.configure(text=f"{var.get() * 100:.0f} %")
+
+        ctk.CTkSlider(row, from_=lo, to=hi, variable=var, height=14, button_color=ORANGE,
+                      button_hover_color=ORANGE_LIGHT, progress_color=ORANGE, fg_color=INPUT,
+                      command=update).pack(fill="x")
+        var.trace_add("write", lambda *_: update())
+        update()
+        return var
+
+    def pick_image(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Vyber fotku",
+            filetypes=[("Obrázky", "*.png *.jpg *.jpeg *.webp *.bmp"), ("Všechny soubory", "*.*")])
+        if path:
+            self.image_path = path
+            self.img_label.configure(text=Path(path).name, text_color=TEXT)
+
+    def clear_image(self) -> None:
+        self.image_path = ""
+        self.img_label.configure(text="Žádná fotka", text_color=MUTED)
+
+    def _load_fx(self, fx: dict) -> None:
+        d = {**default_effects(), **fx}
+        self.fx_intro_var.set(INTRO_LABELS.get(d["intro"], INTRO_LABELS["none"]))
+        self.fx_secs_var.set(str(d["intro_seconds"]))
+        self.fx_x.set(float(d["image_x"]))
+        self.fx_y.set(float(d["image_y"]))
+        self.fx_scale.set(float(d["image_scale"]))
+        self.fx_img_from.set(str(d["image_start"]))
+        self.fx_img_to.set(str(d["image_end"]))
+        if d["image"] and Path(d["image"]).exists():
+            self.image_path = d["image"]
+            self.img_label.configure(text=Path(d["image"]).name, text_color=TEXT)
+        else:
+            self.clear_image()
+
+    def _read_fx(self) -> dict:
+        def number(text: str, name: str, lo: float, hi: float) -> float:
+            try:
+                v = float(text.replace(",", "."))
+            except ValueError:
+                raise ValueError(f"Hodnota „{name}“ musí být číslo.")
+            return max(lo, min(hi, v))
+
+        return {
+            "intro": INTRO_KEYS.get(self.fx_intro_var.get(), "none"),
+            "intro_seconds": number(self.fx_secs_var.get(), "Délka efektu", 0.1, 3.0),
+            "image": self.image_path,
+            "image_x": round(float(self.fx_x.get()), 3),
+            "image_y": round(float(self.fx_y.get()), 3),
+            "image_scale": round(float(self.fx_scale.get()), 3),
+            "image_start": number(self.fx_img_from.get(), "Fotka od", 0.0, 3600.0),
+            "image_end": number(self.fx_img_to.get(), "Fotka do", 0.0, 3600.0),
+        }
+
     def _set_status(self, text: str, color: str = MUTED) -> None:
         self.status.configure(text=text, text_color=color)
 
@@ -423,6 +545,11 @@ class EditorPage(ctk.CTkFrame):
                 items.append((a - ts, b - ts, it["text"]))
 
         tags = [t if t.startswith("#") else f"#{t}" for t in self.tags_var.get().split() if t]
+        try:
+            effects = self._read_fx()
+        except ValueError as exc:
+            self._set_status(str(exc), RED)
+            return
         new_clip = dict(self.clip)
         new_clip.update({
             "start": round(float(self.clip["start"]) + ts, 2),
@@ -430,6 +557,7 @@ class EditorPage(ctk.CTkFrame):
             "title": self.title_var.get().strip() or self.clip.get("title", "klip"),
             "description": self.desc_box.get("1.0", "end").strip(),
             "hashtags": tags,
+            "effects": effects,
         })
         cfg = copy.deepcopy(self.app.cfg)
         folder, file_name, source = self.folder, self.file_name, self.manifest.get("source", "")
@@ -442,7 +570,7 @@ class EditorPage(ctk.CTkFrame):
             for c in data.get("clips", []):
                 if c.get("file") == file_name:
                     c.update({k: new_clip[k] for k in
-                              ("start", "end", "title", "description", "hashtags")})
+                              ("start", "end", "title", "description", "hashtags", "effects")})
             (folder / "clips.json").write_text(json.dumps(data, ensure_ascii=False, indent=1),
                                                encoding="utf-8")
             if downloaded and not cfg["download"]["keep_source"]:

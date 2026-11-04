@@ -48,6 +48,11 @@ SECTIONS: list[tuple[str, str, list[F]]] = [
     ]),
 
     ("clips", "Výběr klipů", [
+        F("content_type", "shorts", "choice", "Typ obsahu",
+          "shorts = obecné krátké klipy (20-60 s). gaming = hraní, důraz na emoce a reakce (25-90 s). "
+          "vlog = povídání a příběhy, důraz na srozumitelnost (30-75 s). long_form = delší klipy 60+ s "
+          "(60-180 s), důraz na pointu. Typ přepíše délky a váhy hodnocení.",
+          options=["shorts", "gaming", "vlog", "long_form"]),
         F("count_per_hour", 6, "float", "Klipů na hodinu materiálu",
           "Zhruba kolik klipů chceš na hodinu streamu. AI může vrátit méně, když nic dobrého není.",
           min=0.5, max=60),
@@ -78,6 +83,10 @@ SECTIONS: list[tuple[str, str, list[F]]] = [
     ]),
 
     ("ai", "AI", [
+        F("speed_mode", "vyvážené", "choice", "Priorita rychlosti",
+          "rychlé = nejrychlejší zpracování (menší přepis a kratší odezva AI, o něco nižší přesnost). "
+          "vyvážené = výchozí. kvalitní = nejpřesnější, nejpomalejší.",
+          options=["rychlé", "vyvážené", "kvalitní"]),
         F("provider", "ollama", "choice", "Poskytovatel AI",
           "ollama = běží lokálně a zdarma. openrouter = cloud, platíš za použití.",
           options=["ollama", "openrouter"]),
@@ -182,6 +191,13 @@ SECTIONS: list[tuple[str, str, list[F]]] = [
           min=0, max=3650),
         F("max_cache_gb", 20.0, "float", "Maximální velikost cache (GB)",
           "Když cache přeroste, nejdřív se smažou nejstarší stažená videa.", min=0.5, max=2000),
+    ]),
+
+    ("learning", "Učení z hodnocení", [
+        F("enabled", True, "bool", "Učit se z tvých hodnocení",
+          "Klipy označené 👍 nebo 👎 se uloží a AI podle nich příště lépe pozná, co se ti líbí."),
+        F("examples", 6, "int", "Počet příkladů v promptu",
+          "Kolik nedávných dobrých a špatných klipů se pošle AI jako příklad.", min=0, max=30),
     ]),
 
     ("youtube", "YouTube", [

@@ -19,6 +19,8 @@ download:
 
 # ===== Výběr klipů =====
 clips:
+  # shorts = obecné krátké klipy (20-60 s). gaming = hraní, důraz na emoce a reakce (25-90 s). vlog = povídání a příběhy, důraz na srozumitelnost (30-75 s). long_form = delší klipy 60+ s (60-180 s), důraz na pointu. Typ přepíše délky a váhy hodnocení. Možnosti: shorts, gaming, vlog, long_form.
+  content_type: "shorts"
   # Zhruba kolik klipů chceš na hodinu streamu. AI může vrátit méně, když nic dobrého není. Rozsah: 0.5-60.
   count_per_hour: 6
   # Kratší klipy se zahodí. Pro Shorts a Reels je dobrý rozsah 20 až 60 s. Rozsah: 5-180.
@@ -47,6 +49,8 @@ scoring:
 
 # ===== AI =====
 ai:
+  # rychlé = nejrychlejší zpracování (menší přepis a kratší odezva AI, o něco nižší přesnost). vyvážené = výchozí. kvalitní = nejpřesnější, nejpomalejší. Možnosti: rychlé, vyvážené, kvalitní.
+  speed_mode: "vyvážené"
   # ollama = běží lokálně a zdarma. openrouter = cloud, platíš za použití. Možnosti: ollama, openrouter.
   provider: "ollama"
   # Přepis se AI posílá po kouscích. Kratší části = přesnější, ale víc požadavků. Rozsah: 5-120.
@@ -151,6 +155,13 @@ cache:
   auto_clean_days: 14
   # Když cache přeroste, nejdřív se smažou nejstarší stažená videa. Rozsah: 0.5-2000.
   max_cache_gb: 20.0
+
+# ===== Učení z hodnocení =====
+learning:
+  # Klipy označené 👍 nebo 👎 se uloží a AI podle nich příště lépe pozná, co se ti líbí.
+  enabled: true
+  # Kolik nedávných dobrých a špatných klipů se pošle AI jako příklad. Rozsah: 0-30.
+  examples: 6
 
 # ===== YouTube =====
 youtube:
