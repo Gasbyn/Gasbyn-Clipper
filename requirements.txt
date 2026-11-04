@@ -3,3 +3,5 @@ faster-whisper
 requests
 pyyaml
 customtkinter
+google-api-python-client
+google-auth-oauthlib

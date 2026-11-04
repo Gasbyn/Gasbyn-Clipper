@@ -529,26 +529,57 @@ def write_srt(path: Path, items: list[tuple[float, float, str]]) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def parse_srt(path: Path) -> list[tuple[float, float, str]]:
+    """Načte titulky z .srt (čas od začátku klipu)."""
+    def secs(h, m, s, ms) -> float:
+        return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
+
+    items = []
+    if not path.exists():
+        return items
+    text = path.read_text(encoding="utf-8")
+    for block in re.split(r"\n\s*\n", text.strip()):
+        lines = block.strip().splitlines()
+        if len(lines) < 3:
+            continue
+        m = re.match(r"(\d+):(\d+):(\d+),(\d+)\s*-->\s*(\d+):(\d+):(\d+),(\d+)", lines[1])
+        if not m:
+            continue
+        g = m.groups()
+        items.append((secs(*g[0:4]), secs(*g[4:8]), " ".join(lines[2:])))
+    return items
+
+
 POSITION_ALIGN = {"bottom": 2, "middle": 5, "top": 8}
 
 
 def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
-                cfg: dict, index: int, rep: Reporter) -> Path:
+                cfg: dict, index: int, rep: Reporter,
+                items_override: Optional[list] = None,
+                name_override: Optional[str] = None) -> Path:
+    """items_override: vlastní titulky (čas od začátku klipu, text) z editoru.
+    name_override: přepíše název souboru (použije se při přerenderování)."""
     o, cap = cfg["output"], cfg["captions"]
     w, h = int(o["width"]), int(o["height"])
 
-    try:
-        name = o["file_pattern"].format(index=index, score=round(clip["score"]),
-                                        title=slugify(clip["title"], 40))
-    except (KeyError, IndexError, ValueError):
-        name = f"klip_{index:02d}"
-    name = slugify(name, 120)
+    if name_override:
+        name = name_override
+    else:
+        try:
+            name = o["file_pattern"].format(index=index, score=round(clip["score"]),
+                                            title=slugify(clip["title"], 40))
+        except (KeyError, IndexError, ValueError):
+            name = f"klip_{index:02d}"
+        name = slugify(name, 120)
 
     vf = [f"crop=trunc(ih*{w}/{h}/2)*2:ih", f"scale={w}:{h}", "setsar=1"]
 
     if cap["enabled"]:
-        items = caption_items(segments, clip["start"], clip["end"],
-                              int(cap["words_per_caption"]), bool(cap["uppercase"]))
+        if items_override is not None:
+            items = items_override
+        else:
+            items = caption_items(segments, clip["start"], clip["end"],
+                                  int(cap["words_per_caption"]), bool(cap["uppercase"]))
         srt_name = f"{name}.srt"
         write_srt(out_dir / srt_name, items)
         style = ",".join([

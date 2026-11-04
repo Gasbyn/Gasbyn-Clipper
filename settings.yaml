@@ -151,3 +151,17 @@ cache:
   auto_clean_days: 14
   # Když cache přeroste, nejdřív se smažou nejstarší stažená videa. Rozsah: 0.5-2000.
   max_cache_gb: 20.0
+
+# ===== YouTube =====
+youtube:
+  # OAuth klíč typu Desktop app z Google Cloud Console. Postup je v README. Bez něj nejde nahrávat.
+  client_secret_file: ""
+  # private = jen ty, unlisted = přes odkaz, public = všichni. Nový projekt bez auditu nahraje vždy jako private. Možnosti: private, unlisted, public.
+  default_privacy: "private"
+
+# ===== Aktualizace =====
+updates:
+  # Aplikace se podívá na GitHub, jestli není novější verze. Jen u sestavené .exe.
+  auto_check: true
+  # Když je nová verze, stáhne a nainstaluje ji sama a restartuje aplikaci. Vypnuté = jen zobrazí tlačítko.
+  auto_install: false

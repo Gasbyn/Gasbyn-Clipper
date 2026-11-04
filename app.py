@@ -19,6 +19,10 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 import core
+import updater
+import youtube
+from editor import EditorPage
+from version import APP_VERSION
 from core import (Reporter, Cancelled, run_job, clean_cache, cache_report,
                   auto_clean, check_environment, load_or_default, save, ROOT)
 from schema import SECTIONS, default_settings, _coerce
@@ -88,6 +92,8 @@ class App(ctk.CTk):
         self.pages: dict[str, ctk.CTkFrame] = {}
         self.nav: dict[str, ctk.CTkButton] = {}
         self.setting_widgets: dict[tuple[str, str], tuple] = {}
+        self.bg_events: queue.Queue = queue.Queue()
+        self._update_info: dict | None = None
 
         self._build_sidebar()
         self.content = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
@@ -97,9 +103,13 @@ class App(ctk.CTk):
         self._build_results_page()
         self._build_settings_page()
         self._build_cache_page()
+        self.pages["editor"] = EditorPage(self.content, self)
 
         self.show("create")
         self.after(100, self._poll_events)
+        self.after(200, self._poll_extra)
+        if updater.is_frozen() and self.cfg["updates"]["auto_check"]:
+            self._start_update_check()
 
     # ------------------------------------------------------------ kostra
 
@@ -132,6 +142,11 @@ class App(ctk.CTk):
         ctk.CTkButton(side, text="Zkontrolovat prostředí", height=32, corner_radius=8,
                       fg_color=INPUT, hover_color=BORDER, text_color=TEXT, font=fnt(11),
                       command=self.check_env).pack(fill="x", padx=20, pady=(10, 0))
+        self.update_btn = ctk.CTkButton(
+            side, text="", height=34, corner_radius=8, fg_color=ORANGE, hover_color=ORANGE_LIGHT,
+            text_color="white", font=fnt(11, True), command=self.install_update)
+        ctk.CTkLabel(side, text=f"Verze {APP_VERSION}", font=fnt(10), text_color=DIM).pack(
+            side="bottom", anchor="w", padx=24, pady=12)
 
     def show(self, name: str) -> None:
         for key, frame in self.pages.items():
@@ -295,6 +310,92 @@ class App(ctk.CTk):
             pass
         self.after(100, self._poll_events)
 
+    # ------------------------------------------------------------ editor, aktualizace, YouTube
+
+    def open_path(self, path: Path) -> None:
+        open_path(path)
+
+    def open_editor(self, folder: Path, file_name: str) -> None:
+        if self.pages["editor"].load(folder, file_name):
+            self.show("editor")
+
+    def _start_update_check(self) -> None:
+        def job() -> None:
+            try:
+                info = updater.check_for_update()
+            except Exception as exc:  # noqa: BLE001
+                self.bg_events.put(("upd_error", str(exc)))
+                return
+            if info:
+                self.bg_events.put(("upd_found", info))
+        threading.Thread(target=job, daemon=True).start()
+
+    def install_update(self) -> None:
+        if not self._update_info:
+            return
+        url = self._update_info["url"]
+        self.update_btn.configure(state="disabled", text="Stahuji…")
+
+        def job() -> None:
+            try:
+                path = updater.download_installer(
+                    url, progress=lambda f: self.bg_events.put(("upd_progress", f)))
+                self.bg_events.put(("upd_ready", str(path)))
+            except Exception as exc:  # noqa: BLE001
+                self.bg_events.put(("upd_error", str(exc)))
+        threading.Thread(target=job, daemon=True).start()
+
+    def _poll_extra(self) -> None:
+        try:
+            while True:
+                ev = self.bg_events.get_nowait()
+                kind = ev[0]
+                if kind == "upd_found":
+                    self._update_info = ev[1]
+                    if self.cfg["updates"]["auto_install"]:
+                        self.install_update()
+                    else:
+                        self.update_btn.configure(
+                            text=f"Aktualizovat na v{ev[1]['version']}", state="normal")
+                        self.update_btn.pack(side="bottom", fill="x", padx=20, pady=(0, 8))
+                elif kind == "upd_progress":
+                    self.update_btn.configure(text=f"Stahuji {ev[1] * 100:.0f} %")
+                elif kind == "upd_ready":
+                    updater.install_and_restart(Path(ev[1]))
+                    self.destroy()
+                    return
+                elif kind == "upd_error":
+                    self.update_btn.configure(text="Aktualizace selhala", state="normal")
+                    self.update_btn.pack(side="bottom", fill="x", padx=20, pady=(0, 8))
+                elif kind == "yt_done":
+                    self.yt_status.configure(text=ev[1], text_color=GREEN)
+                elif kind == "yt_error":
+                    self.yt_status.configure(text=f"Chyba: {ev[1]}", text_color=RED)
+        except queue.Empty:
+            pass
+        self.after(200, self._poll_extra)
+
+    def connect_youtube(self) -> None:
+        raw = self.cfg["youtube"]["client_secret_file"]
+        secret = Path(raw) if raw else None
+        if not secret or not secret.exists():
+            self.yt_status.configure(
+                text="Nejdřív vyber soubor client_secret a ulož nastavení.", text_color=RED)
+            return
+        self.yt_status.configure(text="Otevírám přihlášení v prohlížeči…", text_color=MUTED)
+
+        def job() -> None:
+            try:
+                youtube.connect(secret, ROOT)
+                self.bg_events.put(("yt_done", "Účet YouTube je připojený."))
+            except Exception as exc:  # noqa: BLE001
+                self.bg_events.put(("yt_error", str(exc)))
+        threading.Thread(target=job, daemon=True).start()
+
+    def disconnect_youtube(self) -> None:
+        youtube.disconnect(ROOT)
+        self.yt_status.configure(text="Odpojeno.", text_color=MUTED)
+
     def check_env(self) -> None:
         lines = check_environment(self.cfg)
         self.env_label.configure(text="\n".join(lines),
@@ -407,6 +508,10 @@ class App(ctk.CTk):
         ctk.CTkButton(btns, text="Kopírovat", width=90, height=30, corner_radius=8, fg_color=INPUT,
                       hover_color=BORDER, text_color=TEXT, font=fnt(11),
                       command=lambda c=clip: self._copy_meta(c)).pack(side="left", padx=(6, 0))
+        ctk.CTkButton(btns, text="Upravit", width=90, height=30, corner_radius=8, fg_color=INPUT,
+                      hover_color=BORDER, text_color=ORANGE_LIGHT, font=fnt(11, True),
+                      command=lambda f=folder, n=clip.get("file", ""): self.open_editor(f, n)
+                      ).pack(side="left", padx=(6, 0))
 
     def _copy_meta(self, clip: dict) -> None:
         text = f"{clip.get('title', '')}\n\n{clip.get('description', '')}\n\n{' '.join(clip.get('hashtags', []))}"
@@ -442,6 +547,27 @@ class App(ctk.CTk):
                          ).pack(anchor="w", pady=(18, 6), padx=4)
             for f in fields:
                 self._setting_row(scroll, sec, f)
+
+        yt_card = self._card(scroll)
+        yt_card.pack(fill="x", pady=(18, 4), padx=2)
+        ctk.CTkLabel(yt_card, text="Účet YouTube", font=fnt(12, True), text_color=TEXT
+                     ).pack(anchor="w", padx=16, pady=(12, 0))
+        ctk.CTkLabel(yt_card, text="Nejdřív vlož soubor client_secret a ulož nastavení. "
+                                   "Pak připoj účet. Token se ukládá jen do této složky.",
+                     font=fnt(10), text_color=MUTED, wraplength=760, justify="left"
+                     ).pack(anchor="w", padx=16, pady=(2, 8))
+        yt_row = ctk.CTkFrame(yt_card, fg_color="transparent")
+        yt_row.pack(fill="x", padx=16, pady=(0, 14))
+        ctk.CTkButton(yt_row, text="Připojit účet", height=34, corner_radius=8, fg_color=ORANGE,
+                      hover_color=ORANGE_LIGHT, text_color="white", font=fnt(12, True),
+                      command=self.connect_youtube).pack(side="left")
+        ctk.CTkButton(yt_row, text="Odpojit", height=34, corner_radius=8, fg_color=INPUT,
+                      hover_color=BORDER, text_color=TEXT, font=fnt(12),
+                      command=self.disconnect_youtube).pack(side="left", padx=8)
+        self.yt_status = ctk.CTkLabel(
+            yt_row, text="Připojeno" if youtube.is_connected(ROOT) else "Nepřipojeno",
+            font=fnt(11), text_color=MUTED)
+        self.yt_status.pack(side="left", padx=12)
 
         self._populate_settings(self.cfg)
 

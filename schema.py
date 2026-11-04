@@ -183,6 +183,21 @@ SECTIONS: list[tuple[str, str, list[F]]] = [
         F("max_cache_gb", 20.0, "float", "Maximální velikost cache (GB)",
           "Když cache přeroste, nejdřív se smažou nejstarší stažená videa.", min=0.5, max=2000),
     ]),
+
+    ("youtube", "YouTube", [
+        F("client_secret_file", "", "path", "Soubor client_secret (JSON)",
+          "OAuth klíč typu Desktop app z Google Cloud Console. Postup je v README. Bez něj nejde nahrávat."),
+        F("default_privacy", "private", "choice", "Výchozí viditelnost",
+          "private = jen ty, unlisted = přes odkaz, public = všichni. Nový projekt bez auditu nahraje vždy jako private.",
+          options=["private", "unlisted", "public"]),
+    ]),
+
+    ("updates", "Aktualizace", [
+        F("auto_check", True, "bool", "Kontrolovat aktualizace při startu",
+          "Aplikace se podívá na GitHub, jestli není novější verze. Jen u sestavené .exe."),
+        F("auto_install", False, "bool", "Instalovat automaticky",
+          "Když je nová verze, stáhne a nainstaluje ji sama a restartuje aplikaci. Vypnuté = jen zobrazí tlačítko."),
+    ]),
 ]
 
 

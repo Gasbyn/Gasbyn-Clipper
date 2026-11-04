@@ -2,6 +2,9 @@ name: Release
 
 # Při pushnutí tagu v1.2.3 se na Windows runneru sestaví aplikace a Setup.exe
 # se připojí k GitHub Release s tímto tagem.
+#
+# Volitelný podpis certifikátem: nastav repo secrets CODESIGN_PFX_BASE64 (PFX soubor v base64)
+# a CODESIGN_PASSWORD. Bez nich se build podepíše nepodepsaný, jako dosud.
 on:
   push:
     tags:
@@ -9,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Verze, např. v1.0.1 (Release s tímto tagem se vytvoří na aktuálním commitu main)"
+        description: "Verze, např. v1.2.0 (Release s tímto tagem se vytvoří na aktuálním commitu main)"
         required: true
-        default: "v1.1.0"
+        default: "v1.2.0"
 
 permissions:
   contents: write
@@ -19,6 +22,10 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+      CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,6 +34,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Set version from tag
+        shell: pwsh
+        run: python set_version.py $env:RELEASE_TAG
 
       - name: Install dependencies
         shell: pwsh
@@ -58,11 +69,23 @@ jobs:
         run: |
           python -m PyInstaller --noconfirm --onedir --windowed --name GasbynClipper `
             --collect-all yt_dlp --collect-all faster_whisper --collect-all ctranslate2 `
-            --collect-all customtkinter `
+            --collect-all customtkinter --collect-all googleapiclient `
+            --collect-all google_auth_oauthlib `
             app.py
           Copy-Item settings.yaml dist\GasbynClipper\
           New-Item -ItemType Directory -Force -Path dist\GasbynClipper\ffmpeg | Out-Null
           Copy-Item ffmpeg_pkg\ffmpeg.exe dist\GasbynClipper\ffmpeg\
+
+      - name: Sign application (optional)
+        shell: pwsh
+        run: |
+          if (-not $env:CODESIGN_PFX_BASE64) { Write-Host "Podpis přeskočen (chybí secret)."; exit 0 }
+          [IO.File]::WriteAllBytes("$PWD\cert.pfx", [Convert]::FromBase64String($env:CODESIGN_PFX_BASE64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1
+          & $signtool.FullName sign /f cert.pfx /p $env:CODESIGN_PASSWORD /fd SHA256 `
+            /tr http://timestamp.digicert.com /td SHA256 /d "Gasbyn Clipper" `
+            dist\GasbynClipper\GasbynClipper.exe
+          if ($LASTEXITCODE -ne 0) { throw "Podpis aplikace selhal" }
 
       - name: Build installer
         shell: pwsh
@@ -71,9 +94,19 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
           if (-not (Test-Path Output\Setup.exe)) { throw "Setup.exe nebyl vytvořen" }
 
+      - name: Sign installer (optional)
+        shell: pwsh
+        run: |
+          if (-not $env:CODESIGN_PFX_BASE64) { exit 0 }
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1
+          & $signtool.FullName sign /f cert.pfx /p $env:CODESIGN_PASSWORD /fd SHA256 `
+            /tr http://timestamp.digicert.com /td SHA256 /d "Gasbyn Clipper Setup" `
+            Output\Setup.exe
+          if ($LASTEXITCODE -ne 0) { throw "Podpis instalátoru selhal" }
+
       - name: Publish release with Setup.exe
         uses: softprops/action-gh-release@v2
         with:
           files: Output/Setup.exe
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true

@@ -16,15 +16,12 @@ Pro výběr klipů potřebuješ jedno z toho:
 
 Doporučeno: NVIDIA GPU (RTX 3060 12 GB a lepší). Přepis je pak výrazně rychlejší.
 
-Windows může při prvním spuštění ukázat varování SmartScreen, protože aplikace není podepsaná certifikátem. Klikni na *Více informací → Přesto spustit*.
-
 ## Použití
 
 1. Vlož URL VODu nebo cestu k lokálnímu videu.
 2. Stiskni **Spustit AI Clipper**.
-3. Hotové klipy najdeš na stránce **Hotové klipy**: skóre, titulek, popis, hashtagy, tlačítka Přehrát, Složka a Kopírovat.
-
-Běh má fáze: stažení, přepis, hodnocení AI, střih. Průběh je vidět v logu a v ukazateli. Běh jde kdykoli zrušit.
+3. Hotové klipy najdeš na stránce **Hotové klipy**: skóre, titulek, popis, hashtagy.
+   Tlačítko **Upravit** otevře editor, **Přehrát** otevře klip ve výchozím přehrávači.
 
 ## Hodnocení kvality
 
@@ -39,25 +36,59 @@ Každý navržený klip dostane skóre 0 až 100 jako vážený průměr těchto
 | Humor | Jak je vtipný? |
 | Tempo | Heuristika z přepisu, ideál 2 až 3,2 slova za sekundu |
 
-Váhy jde nastavit v sekci **Hodnocení kvality**. Práh **Minimální hodnocení** určuje, které klipy se vůbec nevytvoří.
+Váhy nastavíš v sekci **Hodnocení kvality**. Práh **Minimální hodnocení** určuje, které klipy se vůbec nevytvoří.
 
 Hodnocení AI se ukládá do cache. Když později změníš práh nebo váhy, výběr se přepočítá bez nového volání AI. Novou AI analýzu vynutíš zaškrtnutím *Znovu zavolat AI*.
 
-## Nastavení
+## Editor klipu
 
-Všechno je na stránce **Nastavení**, každé pole má popis. Stejné hodnoty jsou v `settings.yaml` s komentáři. Hlavní oblasti:
+Na stránce **Hotové klipy** klikni na **Upravit**. Editor obsahuje:
 
-- **Výběr klipů**: počet na hodinu, délka, práh hodnocení, povolené překrytí
-- **Hodnocení kvality**: váhy jednotlivých kritérií
-- **AI**: Ollama nebo OpenRouter, modely, teplota, kontext, popis kanálu, vlastní pokyny pro AI
-- **Přepis řeči**: model Whisper, zařízení, jazyk, slovník jmen a her
-- **Titulky**: písmo, velikost, barvy, obrys, pozice, velká písmena
-- **Výstup**: rozlišení, FPS, kvalita, složka, název souborů
-- **Cache a úklid**: pracovní složka, co ukládat, automatické mazání, limit velikosti
+- **Časovou osu**: táhni oranžové uchyty a zkrať klip zleva i zprava. Klikni na titulek a zvýrazní se.
+- **Seznam titulků**: uprav čas a text, smaž, nebo přidej nový titulek.
+- **Název, popis a hashtagy**: upravíš je před nahráním.
+- **Uložit a přerenderovat**: vytvoří klip znovu se změnami. Když zdrojové video zmizelo z cache, stáhne se znovu.
 
-## Cache a úklid
+Editor je jednodušší než CapCut. Náhled se přehraje v systémovém přehrávači a klip jde jen zkrátit, ne prodloužit nad původní okno.
 
-Stažená videa, přepisy a výběry AI jsou v pracovní složce `work`. Na stránce **Cache a úklid** vidíš, kolik místa zabírají, a můžeš je vyčistit po částech. Tlačítko *Spustit úklid podle nastavení* smaže staré položky a hlídá limit velikosti.
+## Nahrání na YouTube
+
+YouTube se připojuje přes oficiální YouTube Data API. Zdarma, ale potřebuješ vlastní klíč:
+
+1. Google Cloud Console → vytvoř projekt → zapni **YouTube Data API v3**.
+2. Nastav **OAuth consent screen** a přidej svůj účet jako testovacího uživatele.
+3. Vytvoř **Credentials → OAuth client ID → typ Desktop app**, stáhni JSON.
+4. V Nastavení vyber ten JSON v poli *Soubor client_secret*, ulož nastavení.
+5. Na stránce Nastavení klikni na **Připojit účet** a přihlas se v prohlížeči.
+
+Pak v editoru klikni na **Nahrát na YouTube**. Výchozí viditelnost je `private`.
+
+**Limity, které musíš znát:**
+- Denní kvóta je obvykle 10 000 jednotek a jedno nahrání stojí přibližně 1 600. Vyjde to zhruba na 6 nahrání za den.
+- Dokud projekt neprojde auditem YouTube, videa se nahrají jako soukromá, bez ohledu na nastavení. Audit žádáš přes formulář v dokumentaci YouTube API.
+
+## Automatické aktualizace
+
+Při startu sestavené aplikace se kontroluje nejnovější Release na GitHubu. Když je novější verze, objeví se v levém panelu oranžové tlačítko **Aktualizovat**. V Nastavení můžeš zapnout **Instalovat automaticky**, pak se nová verze stáhne a nainstaluje sama a aplikace se restartuje.
+
+## Antivirus a SmartScreen
+
+Aplikace je zabalená z Pythonu (PyInstaller) a není podepsaná certifikátem. Antiviry a Windows SmartScreen na takové soubory někdy reagují falešně, protože jsou neznámé. **Nezaručím, že se to nestane.** Co se dělá:
+
+- Build se podepisuje certifikátem, jakmile je v repozitáři secret `CODESIGN_PFX_BASE64`. Podepsaná aplikace dostává méně varování. Certifikát stojí peníze, nebo jej lze získat zdarma přes SignPath Foundation pro open source.
+- Když se objeví falešný poplach, pošli soubor na analýzu: microsoft.com/wdsi (Microsoft Defender) a virustotal.com (kontrola několika antivirů).
+- SmartScreen: *Více informací → Přesto spustit*.
+
+## Platformy
+
+| Platforma | Stav |
+|-----------|------|
+| YouTube | Hotovo (nahrání z editoru, vyžaduje vlastní OAuth klíč) |
+| TikTok | Není hotovo. Oficiální upload API vyžaduje schválení aplikace. |
+| Instagram | Není hotovo. Vyžaduje účet typu Business nebo Creator a schválení aplikace u Mety. |
+| Kick | Není hotovo. Kick nemá veřejné API pro nahrávání videa. |
+
+Klipy a popisy můžeš nahrát na TikTok, Instagram a Kick ručně z Průzkumníku.
 
 ## Příkazová řádka (pro pokročilé)
 
@@ -80,11 +111,7 @@ Potřebuješ Python 3.10+ a ffmpeg v PATH. Výchozí nastavení se znovu vygener
 ## Známá omezení
 
 - Oříznutí 9:16 bere střed záběru. Sledování obličeje zatím není, takže u streamů s kamerou v rohu nebo s více lidmi vedle sebe může být výřez špatně.
-- AI vybírá podle řeči a obrazu jen přes přepis. Vtipy, které jsou jen vizuální a nikdo je nekomentuje, nenajde.
-- Publikování na YouTube a TikTok zatím není. Klipy a popisy jsou připravené ke ručnímu nahrání.
+- AI vybírá podle přepisu řeči. Vtipy, které jsou jen vizuální a nikdo je nekomentuje, nenajde.
 - Stahování z Kicku závisí na yt-dlp. Když přestane fungovat, zkus aktualizaci yt-dlp, nebo vlož cookies v nastavení.
-- Hodnocení AI je odhad. Skóre 0 až 100 neznamená, že klip bude mít úspěch. Nejlepší výsledky dává ladění vah a pokynů pro AI podle vlastních výsledků.
-
-## Aktualizace
-
-Nové verze přijdou jako nová Release se `Setup.exe`. Stará verze se přepíše instalací nové.
+- Hodnocení AI je odhad. Skóre 0 až 100 neznamená, že klip bude mít úspěch.
+- Editor nemá vestavěný náhled videa a nelze v něm klip prodloužit.
