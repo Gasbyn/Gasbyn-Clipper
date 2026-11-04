@@ -64,10 +64,15 @@ jobs:
           New-Item -ItemType Directory -Force -Path ffmpeg_pkg | Out-Null
           Copy-Item $bin.FullName ffmpeg_pkg\ffmpeg.exe
 
+      - name: Generate executable version metadata
+        shell: pwsh
+        run: python build_version_info.py
+
       - name: Build application
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --onedir --windowed --name GasbynClipper `
+          python -m PyInstaller --noconfirm --clean --noupx --onedir --windowed `
+            --name GasbynClipper --version-file build\version_info.txt `
             --collect-all yt_dlp --collect-all faster_whisper --collect-all ctranslate2 `
             --collect-all customtkinter --collect-all googleapiclient `
             --collect-all google_auth_oauthlib `
@@ -76,6 +81,26 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist\GasbynClipper\ffmpeg | Out-Null
           Copy-Item ffmpeg_pkg\ffmpeg.exe dist\GasbynClipper\ffmpeg\
 
+      - name: Verify executable metadata
+        shell: pwsh
+        run: |
+          $info = (Get-Item dist\GasbynClipper\GasbynClipper.exe).VersionInfo
+          $checks = @{
+            CompanyName = 'Gasbyn'
+            ProductName = 'Gasbyn Clipper'
+            FileDescription = 'AI Video Clipper for Windows'
+            OriginalFilename = 'GasbynClipper.exe'
+            InternalName = 'GasbynClipper'
+          }
+          foreach ($entry in $checks.GetEnumerator()) {
+            $actual = [string]$info.($entry.Key)
+            if ($actual -ne $entry.Value) {
+              throw "Metadata $($entry.Key) nesouhlasí. Očekáváno '$($entry.Value)', nalezeno '$actual'."
+            }
+            Write-Host "$($entry.Key): $actual"
+          }
+          Write-Host "FileVersion: $($info.FileVersion)"
+          Write-Host "ProductVersion: $($info.ProductVersion)"
       - name: Sign application (optional)
         shell: pwsh
         run: |
