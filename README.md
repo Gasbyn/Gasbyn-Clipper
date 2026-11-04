@@ -99,7 +99,7 @@ Při startu sestavené aplikace se kontroluje nejnovější Release na GitHubu. 
 
 ## Antivirus a SmartScreen
 
-Aplikace je zabalená z Pythonu (PyInstaller) a není podepsaná certifikátem. Antiviry a Windows SmartScreen na takové soubory někdy reagují falešně, protože jsou neznámé. **Nezaručím, že se to nestane.** Co se dělá:
+Aplikace je zabalená z Pythonu (PyInstaller). EXE i instalátor obsahují metadata výrobce **Gasbyn**, název produktu **Gasbyn Clipper**, popis, verzi a copyright; build navíc ověřuje, že metadata v EXE odpovídají projektu. UPX komprese je vypnutá a build používá čisté sestavení bez zbytků předchozích buildů. Tato metadata nejsou digitální podpis a sama o sobě nezaručí odstranění varování. Antiviry a Windows SmartScreen mohou u nových nebo nepodepsaných aplikací stále zobrazit varování. **Nezaručím, že se to nestane.** Co se dělá:
 
 - Build se podepisuje certifikátem, jakmile je v repozitáři secret `CODESIGN_PFX_BASE64`. Podepsaná aplikace dostává méně varování. Certifikát stojí peníze, nebo jej lze získat zdarma přes SignPath Foundation pro open source.
 - Když se objeví falešný poplach, pošli soubor na analýzu: microsoft.com/wdsi (Microsoft Defender) a virustotal.com (kontrola několika antivirů).
