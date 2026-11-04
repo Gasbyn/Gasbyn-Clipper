@@ -119,6 +119,26 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
           if (-not (Test-Path Output\Setup.exe)) { throw "Setup.exe nebyl vytvořen" }
 
+      - name: Verify installer metadata
+        shell: pwsh
+        run: |
+          $info = (Get-Item Output\\Setup.exe).VersionInfo
+          $checks = @{
+            CompanyName = 'Gasbyn'
+            ProductName = 'Gasbyn Clipper'
+            FileDescription = 'Gasbyn Clipper Setup'
+            OriginalFilename = 'Setup.exe'
+          }
+          foreach ($entry in $checks.GetEnumerator()) {
+            $actual = [string]$info.($entry.Key)
+            if ($actual -ne $entry.Value) {
+              throw "Metadata instalátoru $($entry.Key) nesouhlasí. Očekáváno '$($entry.Value)', nalezeno '$actual'."
+            }
+            Write-Host "$($entry.Key): $actual"
+          }
+          Write-Host "FileVersion: $($info.FileVersion)"
+          Write-Host "ProductVersion: $($info.ProductVersion)"
+
       - name: Sign installer (optional)
         shell: pwsh
         run: |
