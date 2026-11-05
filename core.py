@@ -1161,6 +1161,20 @@ def search_kick(channel: str, kinds: list[str], limit: int = 12) -> list[dict]:
     return results[:limit]
 
 
+def stop_ollama() -> None:
+    """Při ukončení Gasbyn Clipperu vypne i Ollamu (server i tray aplikaci)."""
+    try:
+        if os.name == "nt":
+            flags = 0x08000000  # CREATE_NO_WINDOW
+            for image in ("ollama app.exe", "ollama.exe"):
+                subprocess.run(["taskkill", "/IM", image, "/F", "/T"], capture_output=True,
+                               creationflags=flags, timeout=15)
+        else:
+            subprocess.run(["pkill", "-f", "ollama serve"], capture_output=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 # ---------------------------------------------------------------- připravenost (první spuštění)
 
 OLLAMA_INSTALLER_URL = "https://ollama.com/download/OllamaSetup.exe"
@@ -1265,5 +1279,5 @@ __all__ = ["run_job", "Reporter", "Cancelled", "load_or_default", "save", "cache
            "default_settings", "ffmpeg_available", "record_feedback", "render_clip",
            "parse_srt", "get_source", "default_effects", "EFFECT_KINDS", "probe_video",
            "extract_frame", "default_loadout", "clean_loadout", "list_loadouts", "load_loadout",
-           "save_loadout", "last_loadout", "remember_loadout", "start_ollama_background",
+           "save_loadout", "last_loadout", "remember_loadout", "start_ollama_background", "stop_ollama",
            "search_kick"]

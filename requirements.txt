@@ -6,3 +6,4 @@ customtkinter
 google-api-python-client
 google-auth-oauthlib
 pillow
+pystray

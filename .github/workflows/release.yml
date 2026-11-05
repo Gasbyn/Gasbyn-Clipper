@@ -78,6 +78,7 @@ jobs:
             --collect-all yt_dlp --collect-all faster_whisper --collect-all ctranslate2 `
             --collect-all customtkinter --collect-all googleapiclient `
             --collect-all google_auth_oauthlib `
+            --collect-all pystray --collect-all PIL `
             app.py
           # settings.yaml se do instalace nekopíruje: nastavení žijí v %APPDATA%\GasbynClipper
           New-Item -ItemType Directory -Force -Path dist\GasbynClipper\ffmpeg | Out-Null

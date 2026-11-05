@@ -49,8 +49,8 @@ def _inside(rect: list[float], fx: float, fy: float) -> bool:
 
 
 class LoadoutPage(ctk.CTkFrame):
-    FW, FH = 640, 360   # náhled rámce z videa (16:9)
-    PW, PH = 270, 480   # výsledek 9:16
+    FW, FH = 480, 270   # náhled rámce z videa (16:9)
+    PW, PH = 240, 427   # výsledek 9:16
 
     def __init__(self, master, app) -> None:
         super().__init__(master, fg_color=BG, corner_radius=0)
@@ -91,11 +91,14 @@ class LoadoutPage(ctk.CTkFrame):
         self.note = ctk.CTkLabel(self, text="", font=_fnt(11), text_color=ORANGE_LIGHT, anchor="w")
         self.note.pack(fill="x", pady=(0, 8))
 
-        body = ctk.CTkFrame(self, fg_color="transparent")
+        # celá stránka se posouvá, takže se vejde i do menšího okna
+        body = ctk.CTkScrollableFrame(self, fg_color=BG, corner_radius=0)
         body.pack(fill="both", expand=True)
+        row = ctk.CTkFrame(body, fg_color="transparent")
+        row.pack(fill="x", anchor="n")
 
-        left = ctk.CTkFrame(body, fg_color=PANEL, border_color=BORDER, border_width=1, corner_radius=14)
-        left.pack(side="left", anchor="n", padx=(0, 14))
+        left = ctk.CTkFrame(row, fg_color=PANEL, border_color=BORDER, border_width=1, corner_radius=18)
+        left.pack(side="left", anchor="n", padx=(0, 16))
         ctk.CTkLabel(left, text="Snímek z videa, táhni rámeček záběru", font=_fnt(11, True),
                      text_color=MUTED).pack(anchor="w", padx=14, pady=(12, 6))
         self.frame_cv = tk.Canvas(left, width=self.FW, height=self.FH, bg="#000000",
@@ -105,8 +108,8 @@ class LoadoutPage(ctk.CTkFrame):
         self.frame_cv.bind("<B1-Motion>", lambda e: self._motion(e, "frame"))
         self.frame_cv.bind("<ButtonRelease-1>", lambda e: self._release())
 
-        mid = ctk.CTkFrame(body, fg_color=PANEL, border_color=BORDER, border_width=1, corner_radius=14)
-        mid.pack(side="left", anchor="n", padx=(0, 14))
+        mid = ctk.CTkFrame(row, fg_color=PANEL, border_color=BORDER, border_width=1, corner_radius=18)
+        mid.pack(side="left", anchor="n", padx=(0, 16))
         ctk.CTkLabel(mid, text="Výsledek 9:16, táhni vrstvu", font=_fnt(11, True),
                      text_color=MUTED).pack(anchor="w", padx=14, pady=(12, 6))
         self.prev_cv = tk.Canvas(mid, width=self.PW, height=self.PH, bg="#000000",
@@ -116,12 +119,16 @@ class LoadoutPage(ctk.CTkFrame):
         self.prev_cv.bind("<B1-Motion>", lambda e: self._motion(e, "prev"))
         self.prev_cv.bind("<ButtonRelease-1>", lambda e: self._release())
 
-        right = ctk.CTkScrollableFrame(body, fg_color=PANEL, border_color=BORDER, border_width=1,
-                                       corner_radius=14, width=340)
-        right.pack(side="left", fill="both", expand=True)
-        self._build_controls(right)
+        controls = ctk.CTkFrame(body, fg_color="transparent")
+        controls.pack(fill="x", anchor="n", pady=(16, 0))
+        self._build_controls(controls)
 
     def _build_controls(self, parent) -> None:
+        col1 = ctk.CTkFrame(parent, fg_color=PANEL, border_color=BORDER, border_width=1, corner_radius=18)
+        col1.pack(side="left", anchor="n", padx=(0, 16), ipadx=6, ipady=6)
+        col2 = ctk.CTkFrame(parent, fg_color=PANEL, border_color=BORDER, border_width=1, corner_radius=18)
+        col2.pack(side="left", anchor="n", ipadx=6, ipady=6)
+        parent = col1
         ctk.CTkLabel(parent, text="Vrstvy", font=_fnt(11, True), text_color=MUTED
                      ).pack(anchor="w", padx=14, pady=(12, 4))
         self.layer_var = ctk.StringVar(value="—")
@@ -156,6 +163,7 @@ class LoadoutPage(ctk.CTkFrame):
         self._slider(parent, "pw", "Šířka", 0.05, 1)
         self._slider(parent, "ph", "Výška", 0.05, 1)
 
+        parent = col2
         self._section(parent, "Animace na začátku")
         self.anim_var = ctk.StringVar(value=ANIM_LABELS["none"])
         ctk.CTkOptionMenu(parent, variable=self.anim_var, values=list(ANIM_LABELS.values()),

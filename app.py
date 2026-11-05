@@ -17,6 +17,13 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
+from PIL import Image as PILImage, ImageDraw
+
+try:
+    import pystray
+    TRAY_OK = True
+except ImportError:  # bez balíčku pystray se aplikace zavře normálně
+    TRAY_OK = False
 
 import core
 import updater
@@ -131,6 +138,8 @@ class App(ctk.CTk):
         # Ollama se spustí na pozadí hned po zapnutí aplikace
         threading.Thread(target=self._boot_check, daemon=True).start()
 
+        self._tray = None
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.show("create")
         self.after(100, self._poll_events)
         self.after(200, self._poll_extra)
@@ -140,25 +149,28 @@ class App(ctk.CTk):
     # ------------------------------------------------------------ kostra
 
     def _build_sidebar(self) -> None:
-        side = ctk.CTkFrame(self, width=230, fg_color=PANEL, corner_radius=0)
+        side = ctk.CTkFrame(self, width=248, fg_color=PANEL, corner_radius=0)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
 
-        ctk.CTkLabel(side, text="GASBYN", font=fnt(24, True), text_color=ORANGE).pack(
-            anchor="w", padx=24, pady=(30, 0))
-        ctk.CTkLabel(side, text="CLIPPER", font=fnt(13, True), text_color=TEXT).pack(
-            anchor="w", padx=24)
+        brand = ctk.CTkFrame(side, fg_color="transparent")
+        brand.pack(fill="x", padx=22, pady=(30, 0))
+        ctk.CTkFrame(brand, width=4, height=44, fg_color=ORANGE, corner_radius=2).pack(side="left")
+        names = ctk.CTkFrame(brand, fg_color="transparent")
+        names.pack(side="left", padx=(12, 0))
+        ctk.CTkLabel(names, text="GASBYN", font=fnt(22, True), text_color=ORANGE).pack(anchor="w")
+        ctk.CTkLabel(names, text="CLIPPER", font=fnt(12, True), text_color=TEXT).pack(anchor="w")
         ctk.CTkLabel(side, text="AI klipy pro Shorts, Reels a TikTok", font=fnt(10),
-                     text_color=DIM).pack(anchor="w", padx=24, pady=(2, 26))
+                     text_color=DIM, wraplength=200, justify="left").pack(anchor="w", padx=24, pady=(14, 26))
 
         items = [("create", "Vytvořit klipy"), ("results", "Hotové klipy"),
                  ("settings", "Nastavení"), ("cache", "Cache a úklid")]
         for key, label in items:
             btn = ctk.CTkButton(
-                side, text=label, anchor="w", height=40, corner_radius=10,
-                fg_color="transparent", hover_color="#17191E", text_color=MUTED,
+                side, text=label, anchor="w", height=44, corner_radius=12,
+                fg_color="transparent", hover_color="#1B1E25", text_color=MUTED,
                 font=fnt(13), command=lambda k=key: self.show(k))
-            btn.pack(fill="x", padx=14, pady=3)
+            btn.pack(fill="x", padx=14, pady=4)
             self.nav[key] = btn
 
         ctk.CTkFrame(side, height=1, fg_color=BORDER).pack(fill="x", padx=20, pady=20)
@@ -188,18 +200,18 @@ class App(ctk.CTk):
             self.refresh_cache()
 
     def _card(self, parent) -> ctk.CTkFrame:
-        return ctk.CTkFrame(parent, fg_color=PANEL, border_color=BORDER, border_width=1,
-                            corner_radius=14)
+        return ctk.CTkFrame(parent, fg_color=PANEL, border_color="#2A2E37", border_width=1,
+                            corner_radius=18)
 
     def _title(self, parent, text: str, sub: str) -> None:
-        ctk.CTkLabel(parent, text=text, font=fnt(26, True), text_color=TEXT).pack(anchor="w")
+        ctk.CTkLabel(parent, text=text, font=fnt(30, True), text_color=TEXT).pack(anchor="w")
         ctk.CTkLabel(parent, text=sub, font=fnt(12), text_color=MUTED,
-                     wraplength=820, justify="left").pack(anchor="w", pady=(2, 18))
+                     wraplength=760, justify="left").pack(anchor="w", pady=(4, 22))
 
     # ------------------------------------------------------------ 1. vytvořit
 
     def _build_create_page(self) -> None:
-        page = ctk.CTkFrame(self.content, fg_color=BG, corner_radius=0)
+        page = ctk.CTkScrollableFrame(self.content, fg_color=BG, corner_radius=0)
         self.pages["create"] = page
         self._title(page, "Vytvořit klipy",
                     "Vlož URL VODu nebo cestu k videu. AI najde momenty, každému dá hodnocení 0 až 100 "
@@ -269,7 +281,8 @@ class App(ctk.CTk):
             anchor="w", pady=(18, 6))
         self.log_box = ctk.CTkTextbox(page, fg_color=PANEL, border_color=BORDER, border_width=1,
                                       corner_radius=14, font=mono(12), text_color="#B7BBC3")
-        self.log_box.pack(fill="both", expand=True)
+        self.log_box.pack(fill="x")
+        self.log_box.configure(height=240)
         self.log_box.configure(state="disabled")
 
     def _append_log(self, msg: str) -> None:
@@ -760,11 +773,65 @@ class App(ctk.CTk):
         self.update_btn.pack(side="bottom", fill="x", padx=20, pady=(0, 8))
         self.status.configure(text=f"Aktualizace: {message}", text_color=RED)
 
+    # ------------------------------------------------------------ tray a ukončení
+
+    def _make_tray_icon(self):
+        size = 64
+        img = PILImage.new("RGBA", (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.rounded_rectangle((2, 2, size - 2, size - 2), radius=14, fill=(255, 106, 0, 255))
+        draw.text((size // 2 - 9, size // 2 - 12), "G", fill=(255, 255, 255, 255))
+        return img
+
+    def _on_close(self) -> None:
+        if TRAY_OK:
+            self._hide_to_tray()
+        else:
+            self._quit()
+
+    def _hide_to_tray(self) -> None:
+        self.withdraw()
+        if self._tray is not None:
+            return
+        menu = pystray.Menu(
+            pystray.MenuItem("Otevřít Gasbyn Clipper",
+                             lambda icon, item: self.bg_events.put(("tray_show",)), default=True),
+            pystray.MenuItem("Ukončit (vypne i Ollamu)",
+                             lambda icon, item: self.bg_events.put(("tray_quit",))),
+        )
+        self._tray = pystray.Icon("gasbyn_clipper", self._make_tray_icon(), "Gasbyn Clipper", menu)
+        threading.Thread(target=self._tray.run, daemon=True).start()
+
+    def _show_from_tray(self) -> None:
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def _quit(self) -> None:
+        if self.worker and self.worker.is_alive():
+            if not messagebox.askyesno("Ukončit", "Právě běží zpracování. Opravdu ukončit?"):
+                return
+            if self.cancel_event:
+                self.cancel_event.set()
+        if self._tray is not None:
+            try:
+                self._tray.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._tray = None
+        core.stop_ollama()
+        self.destroy()
+
     def _poll_extra(self) -> None:
         try:
             while True:
                 ev = self.bg_events.get_nowait()
                 kind = ev[0]
+                if kind == "tray_show":
+                    self._show_from_tray()
+                elif kind == "tray_quit":
+                    self._quit()
+                    return
                 if kind == "upd_found":
                     self._update_info = ev[1]
                     if self.cfg["updates"]["auto_install"]:
