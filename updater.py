@@ -30,6 +30,11 @@ def check_for_update() -> Optional[dict]:
     """Vrátí {'version', 'url', 'notes'} když je na GitHubu novější verze, jinak None."""
     r = requests.get(API_LATEST, timeout=10,
                      headers={"Accept": "application/vnd.github+json"})
+    if r.status_code == 404:
+        # Bez přihlášení GitHub soukromý repozitář ani jeho releasy neukáže - vrací 404.
+        raise RuntimeError(
+            "GitHub nevrátil nejnovější release (404). Repozitář je pravděpodobně soukromý - "
+            "aktualizace bez přihlášení fungují jen u veřejného repozitáře.")
     r.raise_for_status()
     data = r.json()
     latest = data.get("tag_name", "")

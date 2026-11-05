@@ -6,6 +6,7 @@ zrušení funguje přes threading.Event.
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import os
@@ -738,6 +739,109 @@ def extract_frame(video: Path, out_png: Path, at: float = 1.0) -> Path:
     return out_png
 
 
+def _frame_at(video: Path, t: float, out: Path, width: Optional[int] = None) -> Path:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{t:.2f}",
+           "-i", str(video), "-frames:v", "1"]
+    if width:
+        cmd += ["-vf", f"scale={width}:-2"]
+    cmd.append(str(out))
+    subprocess.run(cmd, check=True, capture_output=True)
+    return out
+
+
+def _heuristic_frame_score(png: Path) -> float:
+    """Bez AI: přednost mají snímky s kontrastem a rozumným jasem (ne černá, ne bílá obrazovka)."""
+    from PIL import Image, ImageStat
+    with Image.open(png) as im:
+        stat = ImageStat.Stat(im.convert("L"))
+    mean, sd = stat.mean[0], stat.stddev[0]
+    score = min(sd, 70.0) / 70.0 * 100.0
+    if mean < 40 or mean > 215:
+        score *= 0.3
+    return score
+
+
+FRAME_PROMPT = (
+    "Toto je snímek z herního livestreamu. Posuzuješ, jak vhodný je jako úvodní snímek "
+    "vertikálního klipu 9:16. Nejlepší je záběr na webkameru streamera (obličej), buď samotný, "
+    "nebo spolu s hrou. Nevhodné jsou černá obrazovka, menu, nastavení, přechod, prázdná scéna "
+    "nebo jen text. Vrať pouze JSON: "
+    '{"score": číslo 0-100, "webcam": true/false, "game": true/false}.'
+)
+
+
+def _vision_frame_score(png: Path, cfg: dict, timeout: int = 120) -> dict:
+    """Ohodnotí snímek přes Ollamu (multimodální model, např. gemma3). Vyhodí výjimku, když to nejde."""
+    ai = cfg["ai"]
+    b64 = base64.b64encode(png.read_bytes()).decode("ascii")
+    r = requests.post(
+        f"{ai['ollama_url'].rstrip('/')}/api/chat",
+        json={"model": ai["ollama_model"], "stream": False, "format": "json",
+              "options": {"temperature": 0.1},
+              "messages": [{"role": "user", "content": FRAME_PROMPT, "images": [b64]}]},
+        timeout=timeout,
+    )
+    r.raise_for_status()
+    data = json.loads(r.json()["message"]["content"])
+    return {"score": float(data.get("score", 0)),
+            "webcam": bool(data.get("webcam")), "game": bool(data.get("game"))}
+
+
+def pick_best_frame(video: Path, duration: float, out_png: Path, cfg: dict,
+                    log: Callable[[str], None] = print, candidates: int = 12) -> Path:
+    """Najde vhodný úvodní snímek: prohledá VOD a vybere záběr s webkamerou (samotnou nebo s hrou).
+
+    Když Ollama neběží nebo model neumí obrázky, použije jednoduché hodnocení kontrastu.
+    Vybraný snímek se uloží v plném rozlišení na out_png.
+    """
+    if duration <= 0:
+        return extract_frame(video, out_png, 1.0)
+    tmp = out_png.parent / "candidates" / out_png.stem
+    tmp.mkdir(parents=True, exist_ok=True)
+    times = [duration * (0.05 + 0.9 * i / max(1, candidates - 1)) for i in range(candidates)]
+    log(f"Hledám vhodný snímek ({candidates} kandidátů z celého VODu)…")
+
+    scored = []
+    for i, t in enumerate(times):
+        png = _frame_at(video, t, tmp / f"c{i:02d}.png", width=480)
+        try:
+            h = _heuristic_frame_score(png)
+        except Exception:  # noqa: BLE001
+            h = 0.0
+        scored.append({"t": t, "png": png, "heur": h, "vision": None})
+
+    use_vision = True
+    for c in scored:
+        if not use_vision:
+            break
+        try:
+            c["vision"] = _vision_frame_score(c["png"], cfg)
+        except Exception as exc:  # noqa: BLE001
+            log(f"AI neohodnotila snímky ({exc}); použit jednodušší výběr. "
+                "Zkontroluj, že v Ollamě běží multimodální model (např. gemma3).")
+            use_vision = False
+
+    def key(c: dict) -> float:
+        v = c["vision"]
+        if v is None:
+            return c["heur"]
+        s = v["score"] if v["webcam"] else v["score"] * 0.4
+        return s + c["heur"] * 0.05
+
+    best = max(scored, key=key)
+    v = best["vision"]
+    detail = (f"skóre {v['score']:.0f}, webkamera: {'ano' if v['webcam'] else 'ne'}, "
+              f"hra: {'ano' if v['game'] else 'ne'}") if v else "jednoduchý výběr"
+    m, s = divmod(int(best["t"]), 60)
+    h, m = divmod(m, 60)
+    stamp = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+    log(f"Vybrán snímek v {stamp} ({detail}).")
+    for c in scored:
+        c["png"].unlink(missing_ok=True)
+    return _frame_at(video, best["t"], out_png)
+
+
 def auto_output(cfg: dict, probe: dict) -> dict:
     """Výstup podle VODu a formátu: rozlišení, snímky, CRF podle bitrate zdroje."""
     o = cfg["output"]
@@ -1278,6 +1382,6 @@ __all__ = ["run_job", "Reporter", "Cancelled", "load_or_default", "save", "cache
            "clean_cache", "auto_clean", "check_environment", "ROOT", "DATA_ROOT", "SETTINGS_FILE",
            "default_settings", "ffmpeg_available", "record_feedback", "render_clip",
            "parse_srt", "get_source", "default_effects", "EFFECT_KINDS", "probe_video",
-           "extract_frame", "default_loadout", "clean_loadout", "list_loadouts", "load_loadout",
+           "extract_frame", "pick_best_frame", "default_loadout", "clean_loadout", "list_loadouts", "load_loadout",
            "save_loadout", "last_loadout", "remember_loadout", "start_ollama_background", "stop_ollama",
            "search_kick"]

@@ -653,7 +653,7 @@ class App(ctk.CTk):
         self.status.configure(text=f"Vybráno: {title}", text_color=GREEN)
 
     def prepare_loadout(self) -> None:
-        """Stáhne video (nebo použije lokální), vytáhne první snímek a otevře editor loadoutu."""
+        """Stáhne video (nebo použije lokální), najde vhodný snímek (webka, příp. s hrou) a otevře editor loadoutu."""
         src = self.url_var.get().strip()
         if not src:
             self.status.configure(text="Vlož nebo vyber video.", text_color=RED)
@@ -670,7 +670,9 @@ class App(ctk.CTk):
             try:
                 video, vid, _downloaded = core.get_source(src, cfg, rep)
                 probe = core.probe_video(video)
-                frame = core.extract_frame(video, core.work_root(cfg) / "frames" / f"{vid}.png", 1.0)
+                frame = core.pick_best_frame(
+                    video, probe["duration"], core.work_root(cfg) / "frames" / f"{vid}.png", cfg,
+                    log=rep.log)
                 lo = core.last_loadout(cfg) or core.default_loadout("short", probe["width"], probe["height"])
                 self.events.put(("prep_done", {"video_id": vid, "probe": probe, "frame": str(frame)}, lo))
             except Exception as exc:  # noqa: BLE001
