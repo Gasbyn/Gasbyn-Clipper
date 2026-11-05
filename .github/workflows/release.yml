@@ -135,7 +135,7 @@ jobs:
           # Jen varování: u instalátoru Inno Setup nedoložená hodnota nesmí zablokovat vydání.
           # Skutečné hodnoty se vypíšou, aby bylo vidět, co Inno zapsal.
           foreach ($entry in $checks.GetEnumerator()) {
-            $actual = [string]$info.($entry.Key)
+            $actual = ([string]$info.($entry.Key)).Trim()
             if ($actual -ne $entry.Value) {
               Write-Host "::warning::Metadata instalátoru $($entry.Key) nesouhlasí. Očekáváno '$($entry.Value)', nalezeno '$actual'."
             } else {
