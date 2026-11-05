@@ -63,6 +63,8 @@ jobs:
           $bin = Get-ChildItem ffmpeg_tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           New-Item -ItemType Directory -Force -Path ffmpeg_pkg | Out-Null
           Copy-Item $bin.FullName ffmpeg_pkg\ffmpeg.exe
+          $probe = Get-ChildItem ffmpeg_tmp -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          Copy-Item $probe.FullName ffmpeg_pkg\ffprobe.exe
 
       - name: Generate executable version metadata
         shell: pwsh
@@ -80,6 +82,7 @@ jobs:
           Copy-Item settings.yaml dist\GasbynClipper\
           New-Item -ItemType Directory -Force -Path dist\GasbynClipper\ffmpeg | Out-Null
           Copy-Item ffmpeg_pkg\ffmpeg.exe dist\GasbynClipper\ffmpeg\
+          Copy-Item ffmpeg_pkg\ffprobe.exe dist\GasbynClipper\ffmpeg\
 
       - name: Verify executable metadata
         shell: pwsh

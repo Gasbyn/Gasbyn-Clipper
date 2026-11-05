@@ -3,49 +3,29 @@
 
 # ===== Zdroj =====
 source:
-  # URL VODu (Kick, YouTube) nebo cesta k lokálnímu videu. Vyplní se do hlavní obrazovky.
-  url: ""
 
 # ===== Stahování =====
 download:
-  # Vyšší kvalita = větší stahování a déle trvá. Pro vertikální klipy stačí 720 až 1080. Rozsah: 240-2160.
-  max_height: 1080
   # Volitelné. Když Kick nebo YouTube stahování blokují, exportuj cookies z prohlížeče a vlož cestu sem.
   cookies_file: ""
-  # Kolikrát se zkusí stažení znovu při výpadku sítě. Rozsah: 0-20.
-  retries: 5
   # Po zpracování nemazat stažený soubor. Zabere hodně místa, ale šetří opětovné stahování.
   keep_source: false
 
-# ===== Výběr klipů =====
+# ===== Vytvořit klipy =====
 clips:
-  # shorts = obecné krátké klipy (20-60 s). gaming = hraní, důraz na emoce a reakce (25-90 s). vlog = povídání a příběhy, důraz na srozumitelnost (30-75 s). long_form = delší klipy 60+ s (60-180 s), důraz na pointu. Typ přepíše délky a váhy hodnocení. Možnosti: shorts, gaming, vlog, long_form.
-  content_type: "shorts"
+  # short = vertikální klipy 9:16 do 60 s (podle loadoutu). long = delší klipy 16:9 od 60 s, délku nastavíš níže. Možnosti: short, long.
+  format: "short"
+  # Platí jen pro short-form. Shorts a Reels mají limit 60 s. Rozsah: 20-60.
+  max_seconds: 60
+  # Platí jen pro long-form. Nejdelší klip, který AI smí vybrat. Nejkratší je 1 minuta. Rozsah: 1-60.
+  long_minutes: 15
   # Zhruba kolik klipů chceš na hodinu streamu. AI může vrátit méně, když nic dobrého není. Rozsah: 0.5-60.
   count_per_hour: 6
-  # Kratší klipy se zahodí. Pro Shorts a Reels je dobrý rozsah 20 až 60 s. Rozsah: 5-180.
-  min_seconds: 20
-  # Delší klipy se zahodí. Shorts zvládnou až 180 s, ale kratší bývají lepší. Rozsah: 10-600.
-  max_seconds: 60
   # Klipy s hodnocením pod touto hranicí se vůbec nevytvoří. Vyšší = méně, ale lepších klipů. Rozsah: 0-100.
   min_score: 50
-  # Kolik procent se dva klipy smí překrývat, aby nebyly téměř stejné. Rozsah: 0-100.
-  max_overlap_percent: 25
 
-# ===== Hodnocení kvality =====
+# ===== Hodnocení kvality (automaticky) =====
 scoring:
-  # Jak moc počítat, že klip zaujme hned v prvních sekundách. Rozsah: 0-100.
-  weight_hook: 25
-  # Smích, šok, napětí, nadšení, hádka. Silné emoce bývají sdílené. Rozsah: 0-100.
-  weight_emotion: 20
-  # Jak dobře klip pochopí divák, který nezná celý stream. Rozsah: 0-100.
-  weight_standalone: 15
-  # Vyvrcholení, vtip nebo vyřešení na konci klipu. Rozsah: 0-100.
-  weight_payoff: 15
-  # Vtipné momenty a hlášky. Rozsah: 0-100.
-  weight_humor: 10
-  # Heuristika z přepisu. Ideální je asi 2 až 3,2 slova za sekundu. Rozsah: 0-100.
-  weight_pacing: 15
 
 # ===== AI =====
 ai:
@@ -53,24 +33,12 @@ ai:
   speed_mode: "vyvážené"
   # ollama = běží lokálně a zdarma. openrouter = cloud, platíš za použití. Možnosti: ollama, openrouter.
   provider: "ollama"
-  # Přepis se AI posílá po kouscích. Kratší části = přesnější, ale víc požadavků. Rozsah: 5-120.
-  chunk_minutes: 30
-  # Nižší = konzistentnější hodnocení. Doporučeno 0,2 až 0,5. Rozsah: 0-1.
-  temperature: 0.3
-  # Kolikrát se zopakuje požadavek na AI, když selže. Rozsah: 0-10.
-  max_retries: 2
-  # Jak dlouho čekat na odpověď jedné části. Rozsah: 30-3600.
-  timeout_s: 900
   # Čím se kanál zabývá, kdo v něm hraje, jaký je humor. AI díky tomu rozumí kontextu.
   channel_context: ""
   # Co chceš, aby AI dělala nebo nedělala. Např. nevybírej momenty s nadávkami.
   extra_instructions: ""
-  # Adresa lokální Ollamy.
-  ollama_url: "http://localhost:11434"
   # Model stažený přes ollama pull. Např. gemma3:12b, gemma3:27b, qwen3:14b.
   ollama_model: "gemma3:12b"
-  # Víc = větší části přepisu, ale víc paměti. Pro 12 GB GPU necháme 16384. Rozsah: 2048-131072.
-  ollama_num_ctx: 16384
   # Název proměnné prostředí, ve které je klíč OpenRouter. Klíč se nikam neukládá.
   openrouter_api_key_env: "OPENROUTER_API_KEY"
   # Model na OpenRouteru, např. anthropic/claude-3.5-haiku nebo google/gemini-2.0-flash-001.
@@ -80,64 +48,30 @@ ai:
 transcription:
   # Větší model = přesnější, ale pomalejší. large-v3-turbo je dobrý kompromis. Možnosti: tiny, base, small, medium, large-v3, large-v3-turbo.
   model: "large-v3-turbo"
-  # auto = GPU, když je dostupná, jinak procesor. Možnosti: auto, cuda, cpu.
-  device: "auto"
-  # auto = float16 na GPU, int8 na procesoru. Pro GPU s málo pamětí zvol int8. Možnosti: auto, float16, int8, float32.
-  compute_type: "auto"
   # auto, nebo kód jazyka: cs, en, de, ...
   language: "auto"
-  # Ignoruje dlouhé pauzy a hudbu. Zrychluje přepis a snižuje halucinace.
-  vad_filter: true
-  # Vyšší = přesnější a pomalejší. 1 je nejrychlejší. Rozsah: 1-10.
-  beam_size: 5
-  # Jména, hry a zkratky, které se mají přepsat správně. Např. názvy her a jména hostů.
-  initial_prompt: ""
 
 # ===== Titulky =====
 captions:
   # Vypnuté = klipy bez titulků.
   enabled: true
-  # Název písma nainstalovaného ve Windows.
-  font: "Arial"
   # Při výšce videa 1920 px. Typicky 50 až 70. Rozsah: 20-150.
   font_size: 60
   # Formát ASS: &HAABBGGRR. &H00FFFFFF = bílá, &H0000FFFF = žlutá.
   text_color: "&H00FFFFFF"
-  # Formát ASS. &H00000000 = černá.
-  outline_color: "&H00000000"
-  # Obrys zlepšuje čitelnost. 3 až 5. Rozsah: 0-12.
-  outline_width: 4
-  # Velikost stínu pod písmem. Rozsah: 0-8.
-  shadow: 0
   # Tučný text bývá čitelnější na mobilu.
   bold: true
   # Titulky celé velkými písmeny.
   uppercase: false
   # Kde titulky na videu jsou. Možnosti: bottom, middle, top.
   position: "bottom"
-  # Vzdálenost od spodního nebo horního okraje. Rozsah: 0-1000.
-  margin_v: 350
   # Méně slov = rychlejší střídání titulků. Rozsah: 1-12.
   words_per_caption: 4
 
 # ===== Výstup =====
 output:
-  # Standard 9:16 je 1080 × 1920. Rozsah: 240-4320.
-  width: 1080
-  # Rozsah: 240-7680.
-  height: 1920
-  # 30 je běžné, 60 plynulejší ale větší soubor. Rozsah: 15-60.
-  fps: 30
-  # Nižší = lepší kvalita a větší soubor. 18 až 23 je rozumné. Rozsah: 0-51.
-  crf: 20
-  # Pomalejší = menší soubor a lepší kvalita při stejném CRF. Možnosti: ultrafast, superfast, veryfast, faster, fast, medium, slow.
-  preset: "veryfast"
-  # Např. 128k, 160k, 192k.
-  audio_bitrate: "160k"
   # Kam se ukládají hotové klipy.
   folder: "output"
-  # Proměnné: {index} = pořadí, {score} = hodnocení, {title} = název klipu.
-  file_pattern: "klip_{index:02d}"
   # Vedle každého klipu uloží titulek, popis, hashtagy a důvod výběru.
   write_txt: true
   # Po skončení se otevře složka s klipy v Průzkumníku.
@@ -145,12 +79,6 @@ output:
 
 # ===== Cache a úklid =====
 cache:
-  # Stažená videa, přepisy a výběry klipů. Zde se hromadí místo.
-  work_dir: "work"
-  # Přepis je nejdražší část. Uložený přepis se při dalším zpracování nepřepisuje.
-  keep_transcripts: true
-  # Uloží hodnocení AI. Změna prahu nebo vah pak neznamená nové volání AI.
-  keep_selections: true
   # Pracovní složky starší než tento počet dní se po zpracování smažou. 0 = nikdy. Rozsah: 0-3650.
   auto_clean_days: 14
   # Když cache přeroste, nejdřív se smažou nejstarší stažená videa. Rozsah: 0.5-2000.
@@ -160,8 +88,6 @@ cache:
 learning:
   # Klipy označené 👍 nebo 👎 se uloží a AI podle nich příště lépe pozná, co se ti líbí.
   enabled: true
-  # Kolik nedávných dobrých a špatných klipů se pošle AI jako příklad. Rozsah: 0-30.
-  examples: 6
 
 # ===== YouTube =====
 youtube:
