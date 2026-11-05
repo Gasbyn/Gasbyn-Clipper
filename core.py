@@ -307,9 +307,9 @@ def get_source(source: str, cfg: dict, rep: Reporter) -> tuple[Path, str, bool]:
             break
         except yt_dlp.utils.DownloadError as exc:
             last_exc = exc
-            if "NOT_FOUND" not in str(exc) or candidate == candidates[-1]:
+            if candidate == candidates[-1]:
                 raise
-            rep.log(f"Kick nenašel {candidate}, zkouším další možné ID ...")
+            rep.log(f"Kick nevrátil {candidate} ({str(exc)[:80]}), zkouším další možné ID ...")
     if info is None:
         raise last_exc
     raw_id = str(info.get("id", "video"))
