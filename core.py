@@ -28,7 +28,18 @@ if getattr(sys, "frozen", False):
 else:
     ROOT = Path(__file__).resolve().parent
 
-SETTINGS_FILE = ROOT / "settings.yaml"
+# Uživatelská data (nastavení, výstupy, cache, loadouty, YouTube token) jsou mimo instalaci,
+# aby aktualizace instalátorem nic nepřepsala. Zdroje (ffmpeg) zůstávají v ROOT.
+if getattr(sys, "frozen", False):
+    DATA_ROOT = Path(os.environ.get("APPDATA") or Path.home()) / "GasbynClipper"
+else:
+    DATA_ROOT = ROOT
+try:
+    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+except OSError:
+    DATA_ROOT = ROOT
+
+SETTINGS_FILE = DATA_ROOT / "settings.yaml"
 
 
 # ---------------------------------------------------------------- hlášení a zrušení
@@ -85,7 +96,7 @@ def clamp(value: float, lo: float = 0.0, hi: float = 100.0) -> float:
 
 
 def work_root(cfg: dict) -> Path:
-    return ROOT / cfg["cache"]["work_dir"]
+    return DATA_ROOT / cfg["cache"]["work_dir"]
 
 
 def _size(path: Path) -> int:
@@ -1042,7 +1053,7 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
     rep.log(f"AI navrhla {len(candidates)} momentů, prahem {cfg['clips']['min_score']}/100 "
             f"prošlo {len(chosen)} klipů.")
 
-    out_dir = ROOT / cfg["output"]["folder"] / video_id
+    out_dir = DATA_ROOT / cfg["output"]["folder"] / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
     for i, clip in enumerate(chosen, 1):
         rep.check()
@@ -1105,7 +1116,7 @@ ALT_URLS: dict[str, list[str]] = {}
 def _kick_item(raw: dict, slug: str, kind: str) -> Optional[dict]:
     if kind == "videos":
         idents = []
-        for cand in (raw.get("uuid"), (raw.get("video") or {}).get("uuid"), raw.get("id")):
+        for cand in ((raw.get("video") or {}).get("uuid"), raw.get("uuid")):
             if cand and str(cand) not in idents:
                 idents.append(str(cand))
         title = raw.get("session_title") or raw.get("title") or "bez názvu"
@@ -1234,7 +1245,15 @@ def check_environment(cfg: dict) -> list[str]:
 
 
 def load_or_default() -> dict:
-    return load_settings(SETTINGS_FILE)
+    """Nastavení z DATA_ROOT. Když chybí, přenese starý soubor z instalace a jinak vytvoří výchozí."""
+    if not SETTINGS_FILE.exists():
+        legacy = ROOT / "settings.yaml"
+        if legacy.exists() and legacy != SETTINGS_FILE:
+            shutil.copyfile(legacy, SETTINGS_FILE)
+    cfg = load_settings(SETTINGS_FILE)
+    if not SETTINGS_FILE.exists():
+        write_settings(SETTINGS_FILE, cfg)
+    return cfg
 
 
 def save(cfg: dict) -> None:
@@ -1242,7 +1261,7 @@ def save(cfg: dict) -> None:
 
 
 __all__ = ["run_job", "Reporter", "Cancelled", "load_or_default", "save", "cache_report",
-           "clean_cache", "auto_clean", "check_environment", "ROOT", "SETTINGS_FILE",
+           "clean_cache", "auto_clean", "check_environment", "ROOT", "DATA_ROOT", "SETTINGS_FILE",
            "default_settings", "ffmpeg_available", "record_feedback", "render_clip",
            "parse_srt", "get_source", "default_effects", "EFFECT_KINDS", "probe_video",
            "extract_frame", "default_loadout", "clean_loadout", "list_loadouts", "load_loadout",

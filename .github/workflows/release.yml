@@ -79,7 +79,7 @@ jobs:
             --collect-all customtkinter --collect-all googleapiclient `
             --collect-all google_auth_oauthlib `
             app.py
-          Copy-Item settings.yaml dist\GasbynClipper\
+          # settings.yaml se do instalace nekopíruje: nastavení žijí v %APPDATA%\GasbynClipper
           New-Item -ItemType Directory -Force -Path dist\GasbynClipper\ffmpeg | Out-Null
           Copy-Item ffmpeg_pkg\ffmpeg.exe dist\GasbynClipper\ffmpeg\
           Copy-Item ffmpeg_pkg\ffprobe.exe dist\GasbynClipper\ffmpeg\

@@ -19,7 +19,7 @@ import customtkinter as ctk
 from tkinter import filedialog
 
 import youtube
-from core import (Reporter, Cancelled, ROOT, get_source, parse_srt, render_clip,
+from core import (Reporter, Cancelled, DATA_ROOT, get_source, parse_srt, render_clip,
                   default_effects)
 
 INTRO_LABELS = {"none": "Žádná", "fade": "Fade in", "unblur": "Unblur in",
@@ -574,7 +574,7 @@ class EditorPage(ctk.CTkFrame):
             (folder / "clips.json").write_text(json.dumps(data, ensure_ascii=False, indent=1),
                                                encoding="utf-8")
             if downloaded and not cfg["download"]["keep_source"]:
-                (ROOT / cfg["cache"]["work_dir"] / "downloads" / f"{_vid}.mp4").unlink(missing_ok=True)
+                (DATA_ROOT / cfg["cache"]["work_dir"] / "downloads" / f"{_vid}.mp4").unlink(missing_ok=True)
             return new_clip
 
         def done(result: dict) -> None:
@@ -591,7 +591,7 @@ class EditorPage(ctk.CTkFrame):
         if not secret or not secret.exists():
             self._set_status("Nejdřív v Nastavení vyber soubor client_secret (YouTube).", RED)
             return
-        creds = youtube.load_credentials(secret, ROOT)
+        creds = youtube.load_credentials(secret, DATA_ROOT)
         if creds is None:
             self._set_status("Účet YouTube není připojený. Připoj ho v Nastavení.", RED)
             return

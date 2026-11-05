@@ -27,7 +27,7 @@ from version import APP_VERSION
 import time
 
 from core import (Reporter, Cancelled, run_job, clean_cache, cache_report,
-                  auto_clean, check_environment, load_or_default, save, ROOT,
+                  auto_clean, check_environment, load_or_default, save, DATA_ROOT,
                   record_feedback, setup_status, pull_ollama_model, prefetch_whisper,
                   OLLAMA_INSTALLER_URL)
 from schema import SECTIONS, default_settings, _coerce
@@ -129,7 +129,7 @@ class App(ctk.CTk):
         self._stage_key = None
         self._stage_t0 = 0.0
         # Ollama se spustí na pozadí hned po zapnutí aplikace
-        threading.Thread(target=core.start_ollama_background, args=(self.cfg,), daemon=True).start()
+        threading.Thread(target=self._boot_check, daemon=True).start()
 
         self.show("create")
         self.after(100, self._poll_events)
@@ -687,16 +687,54 @@ class App(ctk.CTk):
         if self.pages["editor"].load(folder, file_name):
             self.show("editor")
 
+    def _boot_check(self) -> None:
+        """Při každém startu: spustí Ollamu a zapíše do logu, co je zapnuté a co vypnuté."""
+        core.start_ollama_background(self.cfg)
+        st = core.setup_status(self.cfg)
+        self.events.put(("log", f"Start: ffmpeg {'OK' if st['ffmpeg'] else 'CHYBÍ'}"))
+        if st["provider"] == "ollama":
+            state = ("běží" if st["ollama_running"]
+                     else "nainstalovaná, ale neběží" if st["ollama_installed"]
+                     else "není nainstalovaná")
+            self.events.put(("log", f"Start: Ollama {state}"))
+            self.events.put(("log", f"Start: model {self.cfg['ai']['ollama_model']} "
+                                    f"{'připraven' if st['model_ready'] else 'chybí'}"))
+        else:
+            self.events.put(("log", "Start: AI přes OpenRouter"))
+        self.events.put(("log", "Start: YouTube "
+                                + ("připojeno" if youtube.is_connected(DATA_ROOT) else "nepřipojeno")))
+        self.events.put(("log", "Start: " + ("kontroluji aktualizace…" if self.cfg["updates"]["auto_check"]
+                                             else "kontrola aktualizací je vypnutá")))
+
     def _start_update_check(self) -> None:
         def job() -> None:
             try:
                 info = updater.check_for_update()
             except Exception as exc:  # noqa: BLE001
-                # Neúspěšná kontrola na pozadí tichá: žádné tlačítko, jen zápis do logu.
-                print(f"Kontrola aktualizací selhala: {exc}")
+                self.events.put(("log", f"Aktualizace: kontrola selhala ({exc})"))
+                return
+            if info:
+                self.events.put(("log", f"Aktualizace: dostupná verze {info['version']}"))
+                self.bg_events.put(("upd_found", info))
+            else:
+                self.events.put(("log", f"Aktualizace: máš nejnovější verzi ({APP_VERSION})"))
+        threading.Thread(target=job, daemon=True).start()
+
+    def check_updates_now(self) -> None:
+        """Ruční kontrola z Nastavení. Výsledek se ukáže přímo u tlačítka."""
+        self.settings_status.configure(text="Kontroluji aktualizace…", text_color=MUTED)
+
+        def job() -> None:
+            try:
+                info = updater.check_for_update()
+            except Exception as exc:  # noqa: BLE001
+                self.bg_events.put(("upd_check_msg", f"Kontrola selhala: {exc}", RED))
                 return
             if info:
                 self.bg_events.put(("upd_found", info))
+                self.bg_events.put(("upd_check_msg", f"Dostupná verze {info['version']}, tlačítko je vlevo dole.", GREEN))
+            else:
+                self.bg_events.put(("upd_check_msg", f"Máš nejnovější verzi ({APP_VERSION}).", GREEN))
         threading.Thread(target=job, daemon=True).start()
 
     def install_update(self) -> None:
@@ -735,6 +773,8 @@ class App(ctk.CTk):
                         self.update_btn.configure(
                             text=f"Aktualizovat na v{ev[1]['version']}", state="normal")
                         self.update_btn.pack(side="bottom", fill="x", padx=20, pady=(0, 8))
+                elif kind == "upd_check_msg":
+                    self.settings_status.configure(text=ev[1], text_color=ev[2])
                 elif kind == "upd_progress":
                     self.update_btn.configure(text=f"Stahuji {ev[1] * 100:.0f} %")
                 elif kind == "upd_ready":
@@ -766,14 +806,14 @@ class App(ctk.CTk):
 
         def job() -> None:
             try:
-                youtube.connect(secret, ROOT)
+                youtube.connect(secret, DATA_ROOT)
                 self.bg_events.put(("yt_done", "Účet YouTube je připojený."))
             except Exception as exc:  # noqa: BLE001
                 self.bg_events.put(("yt_error", str(exc)))
         threading.Thread(target=job, daemon=True).start()
 
     def disconnect_youtube(self) -> None:
-        youtube.disconnect(ROOT)
+        youtube.disconnect(DATA_ROOT)
         self.yt_status.configure(text="Odpojeno.", text_color=MUTED)
 
     def check_env(self) -> None:
@@ -807,7 +847,7 @@ class App(ctk.CTk):
         self._result_folders: dict[str, Path] = {}
 
     def _output_root(self) -> Path:
-        return ROOT / self.cfg["output"]["folder"]
+        return DATA_ROOT / self.cfg["output"]["folder"]
 
     def refresh_results_list(self) -> None:
         root = self._output_root()
@@ -928,6 +968,9 @@ class App(ctk.CTk):
         ctk.CTkButton(bar, text="Obnovit výchozí", height=36, corner_radius=9, fg_color=INPUT,
                       hover_color=BORDER, text_color=TEXT, font=fnt(12),
                       command=self.reset_settings).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(bar, text="Zkontrolovat aktualizace", height=34, corner_radius=9,
+                      fg_color=INPUT, hover_color=BORDER, text_color=TEXT, font=fnt(12),
+                      command=self.check_updates_now).pack(side="left", padx=(10, 0))
         self.settings_status = ctk.CTkLabel(bar, text="", font=fnt(11), text_color=MUTED)
         self.settings_status.pack(side="left", padx=16)
 
@@ -958,7 +1001,7 @@ class App(ctk.CTk):
                       hover_color=BORDER, text_color=TEXT, font=fnt(12),
                       command=self.disconnect_youtube).pack(side="left", padx=8)
         self.yt_status = ctk.CTkLabel(
-            yt_row, text="Připojeno" if youtube.is_connected(ROOT) else "Nepřipojeno",
+            yt_row, text="Připojeno" if youtube.is_connected(DATA_ROOT) else "Nepřipojeno",
             font=fnt(11), text_color=MUTED)
         self.yt_status.pack(side="left", padx=12)
 
@@ -1012,7 +1055,7 @@ class App(ctk.CTk):
 
     def _browse(self, var: ctk.StringVar, key: str) -> None:
         if "dir" in key or "folder" in key:
-            path = filedialog.askdirectory(initialdir=str(ROOT))
+            path = filedialog.askdirectory(initialdir=str(DATA_ROOT))
         else:
             path = filedialog.askopenfilename(filetypes=[("Text", "*.txt"), ("Vše", "*.*")])
         if path:

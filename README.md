@@ -24,6 +24,10 @@ Alternativa místo Ollamy: **OpenRouter** (cloud, platíš za použití). Vytvo�
 
 Doporučeno: NVIDIA GPU (RTX 3060 12 GB a lepší). Přepis je pak výrazně rychlejší.
 
+## Kde jsou data
+
+Nastavení, klipy, cache, loadouty a YouTube přihlášení jsou ve složce `%APPDATA%\GasbynClipper`. Aktualizace instalátorem je nepřepisují, takže nastavení zůstane po každé aktualizaci.
+
 ## Použití
 
 1. Vlož URL VODu nebo cestu k lokálnímu videu. Více zdrojů oddělíš středníkem `;`, zpracují se jeden po druhém.
