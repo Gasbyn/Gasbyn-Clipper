@@ -297,8 +297,21 @@ def get_source(source: str, cfg: dict, rep: Reporter) -> tuple[Path, str, bool]:
     if d["cookies_file"]:
         base_opts["cookiefile"] = d["cookies_file"]
 
-    with yt_dlp.YoutubeDL(base_opts) as ydl:
-        info = ydl.extract_info(source, download=False)
+    candidates = [source] + ALT_URLS.get(source, [])
+    info, last_exc = None, None
+    for candidate in candidates:
+        try:
+            with yt_dlp.YoutubeDL(base_opts) as ydl:
+                info = ydl.extract_info(candidate, download=False)
+            source = candidate
+            break
+        except yt_dlp.utils.DownloadError as exc:
+            last_exc = exc
+            if "NOT_FOUND" not in str(exc) or candidate == candidates[-1]:
+                raise
+            rep.log(f"Kick nenašel {candidate}, zkouším další možné ID ...")
+    if info is None:
+        raise last_exc
     raw_id = str(info.get("id", "video"))
     path = dl_dir / f"{raw_id}.mp4"
 
@@ -1085,13 +1098,20 @@ def start_ollama_background(cfg: dict) -> bool:
 # ---------------------------------------------------------------- hledání videí na Kicku
 
 KICK_API = "https://kick.com/api/v2/channels/{slug}/{kind}"
+# url z vyhledávání -> záložní url (jiné možné ID téhož VODu)
+ALT_URLS: dict[str, list[str]] = {}
 
 
 def _kick_item(raw: dict, slug: str, kind: str) -> Optional[dict]:
     if kind == "videos":
-        ident = raw.get("uuid") or raw.get("video", {}).get("uuid") or raw.get("id")
+        idents = []
+        for cand in (raw.get("uuid"), (raw.get("video") or {}).get("uuid"), raw.get("id")):
+            if cand and str(cand) not in idents:
+                idents.append(str(cand))
         title = raw.get("session_title") or raw.get("title") or "bez názvu"
-        url = f"https://kick.com/{slug}/videos/{ident}" if ident else ""
+        urls = [f"https://kick.com/{slug}/videos/{i}" for i in idents]
+        url = urls[0] if urls else ""
+        ALT_URLS[url] = urls[1:] if url else []
     else:
         ident = raw.get("id") or raw.get("clip_id")
         title = raw.get("title") or "bez názvu"
