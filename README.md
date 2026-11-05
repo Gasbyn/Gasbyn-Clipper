@@ -33,15 +33,31 @@ Doporučeno: NVIDIA GPU (RTX 3060 12 GB a lepší). Přepis je pak výrazně ryc
    Tlačítko **Upravit** otevře editor, **Přehrát** otevře klip ve výchozím přehrávači.
    Pod každým klipem jsou tlačítka **👍 Líbí se** a **👎 Nelíbí**, ze kterých se AI učí (viz níže).
 
-### Typy obsahu a prioritka rychlosti
+### Vyhledání videa a loadout
 
-V Nastavení v sekci **Výběr klipů** zvol **Typ obsahu**:
-- **shorts**: obecné krátké klipy 20 až 60 s (výchozí)
-- **gaming**: hraní, důraz na emoce a reakce, 25 až 90 s
-- **vlog**: povídání a příběhy, důraz na srozumitelnost, 30 až 75 s
-- **long_form**: delší klipy 60 až 180 s, důraz na pointu
+Na první stránce můžeš **najít video** na Kicku: zadej jméno kanálu (např. `gasbyn`), zaškrtni *Videa (VOD)* a/nebo *Klipy a shorty* a klikni **Hledat**. Zobrazí se nejnovější položky, **Vybrat** je vloží do pole pro URL.
+
+Tlačítko **Načíst video a nastavit loadout** stáhne video, vytáhne první snímek a otevře **Loadout 9:16**:
+- Až 5 **záběrů** z jednoho snímku (např. kamera nahoře, hra dole). Každý táhni v náhledu rámce, nastav výřez a místo ve 9:16 (posuvníky nebo tažením myší).
+- **Fotky** z disku, s časem, kdy se mají ukazovat.
+- **Animace na začátku** pro každý záběr i fotku: Fade in, Unblur in, Třes (jen na začátku).
+- **Knihovna**: loadout se uloží pod názvem a jde načíst u dalšího VODu. Poslední použitý se nabídne automaticky.
+
+Loadout platí jen pro **short-form** (9:16). Pro long-form se bere celý rámec.
+
+### Formát klipů a rychlost
+
+V sekci **Vytvořit klipy** zvol:
+- **Short-form**: vertikální klipy do 60 s (výchozí)
+- **Long-form**: delší klipy od 60 s, délku nastavíš v minutách (až 60 min)
 
 V sekci **AI** je **Priorita rychlosti**: *rychlé* použije menší přepis a kratší kontext (o něco nižší přesnost), *vyvážené* je výchozí, *kvalitní* je nejpřesnější a nejpomalejší.
+
+Rozlišení, bitrate a kvalita (CRF) se nastavují automaticky podle konkrétního VODu. Proto je v Nastavení jen to, co opravdu měníš.
+
+### Průběh a odhad
+
+Při stahování se ukazuje **kolik GB z kolika** se stáhlo. Pod ukazatelem jsou odhady: kdy bude hotové stažení, přepis, hodnocení a celé zpracování. Aplikace při zapnutí spustí **Ollamu na pozadí**, pokud je nainstalovaná.
 
 ### Učení z hodnocení
 
@@ -60,7 +76,7 @@ Každý navržený klip dostane skóre 0 až 100 jako vážený průměr těchto
 | Humor | Jak je vtipný? |
 | Tempo | Heuristika z přepisu, ideál 2 až 3,2 slova za sekundu |
 
-Váhy nastavíš v sekci **Hodnocení kvality**. Práh **Minimální hodnocení** určuje, které klipy se vůbec nevytvoří.
+Váhy kritérií se nastavují automaticky podle formátu (short-form, long-form). Práh **Minimální hodnocení** v sekci **Vytvořit klipy** určuje, které klipy se vůbec nevytvoří.
 
 Hodnocení AI se ukládá do cache. Když později změníš práh nebo váhy, výběr se přepočítá bez nového volání AI. Novou AI analýzu vynutíš zaškrtnutím *Znovu zavolat AI*.
 
@@ -141,5 +157,7 @@ Potřebuješ Python 3.10+ a ffmpeg v PATH. Výchozí nastavení se znovu vygener
 - Stahování z Kicku závisí na yt-dlp. Když přestane fungovat, zkus aktualizaci yt-dlp, nebo vlož cookies v nastavení.
 - Hodnocení AI je odhad. Skóre 0 až 100 neznamená, že klip bude mít úspěch.
 - Editor nemá vestavěný náhled videa a nelze v něm klip prodloužit.
+- Loadout zatím neotáčí záběry a nepřidává přechody mezi nimi. Náhled je statický, animace uvidíš až ve výsledném klipu.
+- Vyhledávání na Kicku používá neoficiální API kanálu. Pokud Kick změní strukturu, hledání přestane fungovat, ale stažení přes URL dál poběží.
 - Ollama a model AI instalační program nezabalí. Stahují se z oficiálních zdrojů až při prvním spuštění, takže bez internetu nejde klipovat.
 - Odhad času je jen odhad z dosavadního tempa a při prvním běhu (stahování modelů) bývá méně přesný.

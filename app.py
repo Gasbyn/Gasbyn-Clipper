@@ -22,6 +22,7 @@ import core
 import updater
 import youtube
 from editor import EditorPage
+from loadout import LoadoutPage
 from version import APP_VERSION
 import time
 
@@ -122,6 +123,12 @@ class App(ctk.CTk):
         self._build_settings_page()
         self._build_cache_page()
         self.pages["editor"] = EditorPage(self.content, self)
+        self.pages["loadout"] = LoadoutPage(self.content, self)
+        self.current_loadout: dict | None = None
+        self._stage_key = None
+        self._stage_t0 = 0.0
+        # Ollama se spustí na pozadí hned po zapnutí aplikace
+        threading.Thread(target=core.start_ollama_background, args=(self.cfg,), daemon=True).start()
 
         self.show("create")
         self.after(100, self._poll_events)
@@ -198,6 +205,7 @@ class App(ctk.CTk):
                     "a vystřihne vertikální klipy. Klipy pod nastaveným prahem se nevytvoří.")
 
         self._build_setup_card(page)
+        self._build_search_card(page)
 
         card = self._card(page)
         card.pack(fill="x")
@@ -232,6 +240,14 @@ class App(ctk.CTk):
                         variable=self.reselect_var, fg_color=ORANGE, hover_color=ORANGE_LIGHT,
                         border_color=BORDER, font=fnt(12), text_color=TEXT
                         ).pack(side="left", padx=(28, 0))
+        self.prep_btn = ctk.CTkButton(opts, text="Načíst video a nastavit loadout", height=30,
+                                      corner_radius=8, fg_color=INPUT, hover_color=BORDER,
+                                      text_color=ORANGE_LIGHT, font=fnt(11, True),
+                                      command=self.prepare_loadout)
+        self.prep_btn.pack(side="left", padx=(28, 0))
+        self.loadout_label = ctk.CTkLabel(opts, text="Loadout: výchozí (střed 9:16)",
+                                          font=fnt(11), text_color=MUTED)
+        self.loadout_label.pack(side="left", padx=(14, 0))
 
         self.progress = ctk.CTkProgressBar(inner, progress_color=ORANGE, fg_color=INPUT,
                                            height=8, corner_radius=4)
@@ -276,7 +292,8 @@ class App(ctk.CTk):
             cancel=self.cancel_event,
         )
         kwargs = {"reselect": bool(self.reselect_var.get()),
-                  "captions_override": bool(self.captions_var.get())}
+                  "captions_override": bool(self.captions_var.get()),
+                  "loadout": self.current_loadout}
         self.log_box.configure(state="normal")
         self.log_box.delete("1.0", "end")
         self.log_box.configure(state="disabled")
@@ -318,20 +335,35 @@ class App(ctk.CTk):
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
 
+    STAGES = [(0.0, 0.25, "stažení videa"), (0.25, 0.55, "přepis"),
+              (0.55, 0.75, "hodnocení AI"), (0.75, 1.0, "střih klipů")]
+
     def _update_overall(self, frac_current: float) -> None:
-        """Celkový % přes všechny zdroje ve frontě + odhad zbývajícího času."""
+        """Celkový % přes frontu, odhad dokončení aktuálního kroku a celého zpracování."""
         total = max(1, self._queue_total)
         overall = min(1.0, (self._queue_idx + frac_current) / total)
         self.progress.set(overall)
-        self.overall_label.configure(text=f"Celkem {overall * 100:.0f} %"
-                                          + (f"  ·  zdroj {self._queue_idx + 1}/{total}"
-                                             if total > 1 else ""))
-        eta = ""
-        if self._queue_t0 and overall > 0.02:
-            elapsed = time.time() - self._queue_t0
-            remaining = elapsed * (1 - overall) / overall
-            eta = f"Odhad: zbývá {fmt_duration(remaining)}"
-        self.eta_label.configure(text=eta)
+        self.overall_label.configure(
+            text=f"Celkem {overall * 100:.0f} %"
+                 + (f"  ·  zdroj {self._queue_idx + 1}/{total}" if total > 1 else ""))
+        now = time.time()
+        if self._queue_t0 is None or overall <= 0.02:
+            self.eta_label.configure(text="")
+            return
+        remaining = (now - self._queue_t0) * (1 - overall) / overall
+        idx = next(i for i, (a_, b_, _n) in enumerate(self.STAGES)
+                   if frac_current < b_ or i == len(self.STAGES) - 1)
+        a_, b_, name = self.STAGES[idx]
+        if self._stage_key != (self._queue_idx, idx):
+            self._stage_key = (self._queue_idx, idx)
+            self._stage_t0 = now
+        parts = []
+        local = (frac_current - a_) / (b_ - a_)
+        if local > 0.03 and now > self._stage_t0:
+            stage_left = (now - self._stage_t0) * (1 - local) / local
+            parts.append(f"{name[0].upper() + name[1:]} hotovo za {fmt_duration(stage_left)}")
+        parts.append(f"Vše za {fmt_duration(remaining)}")
+        self.eta_label.configure(text="  ·  ".join(parts))
 
     def _poll_events(self) -> None:
         try:
@@ -369,6 +401,21 @@ class App(ctk.CTk):
                     self.status.configure(text=ev[1], text_color=YELLOW)
                 elif kind == "error":
                     self.status.configure(text=f"Chyba: {ev[1]}", text_color=RED)
+                elif kind == "prep_done":
+                    self.prep_btn.configure(state="normal")
+                    self.status.configure(text="Snímek je připravený, nastav loadout.", text_color=GREEN)
+                    self.pages["loadout"].open(ev[1], ev[2])
+                    self.show("loadout")
+                elif kind == "prep_error":
+                    self.prep_btn.configure(state="normal")
+                    self.status.configure(text=f"Chyba: {ev[1]}", text_color=RED)
+                elif kind == "search_done":
+                    self.search_btn.configure(state="normal")
+                    self.search_status.configure(text=f"Nalezeno: {len(ev[1])}", text_color=MUTED)
+                    self._render_results(ev[1])
+                elif kind == "search_error":
+                    self.search_btn.configure(state="normal")
+                    self.search_status.configure(text=f"Hledání selhalo: {ev[1]}", text_color=RED)
                 elif kind == "setup_log":
                     self._append_log(ev[1])
                 elif kind == "setup_progress":
@@ -507,6 +554,120 @@ class App(ctk.CTk):
         self._run_setup(lambda rep: prefetch_whisper(self.cfg, rep))
 
     # ------------------------------------------------------------ hodnocení klipů
+
+    # ------------------------------------------------------------ vyhledání videa a loadout
+
+    def _build_search_card(self, page) -> None:
+        card = self._card(page)
+        card.pack(fill="x", pady=(0, 14))
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="x", padx=20, pady=16)
+        ctk.CTkLabel(inner, text="Najít video na platformě", font=fnt(13, True), text_color=TEXT
+                     ).pack(anchor="w")
+        row = ctk.CTkFrame(inner, fg_color="transparent")
+        row.pack(fill="x", pady=(10, 0))
+        self.platform_var = ctk.StringVar(value="Kick")
+        ctk.CTkOptionMenu(row, variable=self.platform_var, values=["Kick"], width=110, height=34,
+                          corner_radius=9, fg_color=INPUT, button_color=BORDER,
+                          button_hover_color=BLOCK, dropdown_fg_color=PANEL, text_color=TEXT,
+                          font=fnt(12)).pack(side="left")
+        self.channel_var = ctk.StringVar(value="gasbyn")
+        ctk.CTkEntry(row, textvariable=self.channel_var, width=200, height=34, corner_radius=9,
+                     fg_color=INPUT, border_color=BORDER, text_color=TEXT, font=fnt(12),
+                     placeholder_text="jméno kanálu").pack(side="left", padx=(10, 0))
+        self.kind_videos = ctk.BooleanVar(value=True)
+        self.kind_clips = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(row, text="Videa (VOD)", variable=self.kind_videos, fg_color=ORANGE,
+                        hover_color=ORANGE_LIGHT, border_color=BORDER, font=fnt(12),
+                        text_color=TEXT).pack(side="left", padx=(14, 0))
+        ctk.CTkCheckBox(row, text="Klipy a shorty", variable=self.kind_clips, fg_color=ORANGE,
+                        hover_color=ORANGE_LIGHT, border_color=BORDER, font=fnt(12),
+                        text_color=TEXT).pack(side="left", padx=(14, 0))
+        self.search_btn = ctk.CTkButton(row, text="Hledat", width=100, height=34, corner_radius=9,
+                                        fg_color=ORANGE, hover_color=ORANGE_LIGHT,
+                                        text_color="white", font=fnt(12, True),
+                                        command=self.search_videos)
+        self.search_btn.pack(side="right")
+        self.search_status = ctk.CTkLabel(inner, text="", font=fnt(11), text_color=MUTED, anchor="w")
+        self.search_status.pack(fill="x", pady=(8, 0))
+        self.search_frame = ctk.CTkScrollableFrame(inner, fg_color=INPUT, corner_radius=10, height=170)
+        self.search_frame.pack(fill="x", pady=(6, 0))
+
+    def search_videos(self) -> None:
+        kinds = [k for k, var in (("videos", self.kind_videos), ("clips", self.kind_clips)) if var.get()]
+        if not kinds:
+            self.search_status.configure(text="Vyber aspoň jednu kategorii.", text_color=RED)
+            return
+        channel = self.channel_var.get()
+        self.search_btn.configure(state="disabled")
+        self.search_status.configure(text="Hledám nejnovější…", text_color=MUTED)
+
+        def job() -> None:
+            try:
+                items = core.search_kick(channel, kinds, limit=12)
+            except Exception as exc:  # noqa: BLE001
+                self.events.put(("search_error", str(exc)))
+                return
+            self.events.put(("search_done", items))
+        threading.Thread(target=job, daemon=True).start()
+
+    def _render_results(self, items: list[dict]) -> None:
+        for w in self.search_frame.winfo_children():
+            w.destroy()
+        if not items:
+            ctk.CTkLabel(self.search_frame, text="Nic nenalezeno.", font=fnt(12), text_color=MUTED
+                         ).pack(anchor="w", pady=8)
+            return
+        for it in items:
+            row = ctk.CTkFrame(self.search_frame, fg_color="transparent")
+            row.pack(fill="x", pady=2, padx=4)
+            left = ctk.CTkFrame(row, fg_color="transparent")
+            left.pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(left, text=it["title"], font=fnt(12, True), text_color=TEXT, anchor="w",
+                         justify="left", wraplength=480).pack(anchor="w")
+            kind = "VOD" if it["kind"] == "videos" else "klip"
+            created = it["created"].replace("T", " ")
+            ctk.CTkLabel(left, text=f"{kind} · {created} · {it['seconds'] / 60:.0f} min",
+                         font=fnt(11), text_color=MUTED, anchor="w").pack(anchor="w")
+            ctk.CTkButton(row, text="Vybrat", width=80, height=28, corner_radius=8, fg_color=INPUT,
+                          hover_color=BORDER, text_color=ORANGE_LIGHT, font=fnt(11, True),
+                          command=lambda u=it["url"], t=it["title"]: self._pick_url(u, t)
+                          ).pack(side="right", padx=6)
+
+    def _pick_url(self, url: str, title: str) -> None:
+        self.url_var.set(url)
+        self.status.configure(text=f"Vybráno: {title}", text_color=GREEN)
+
+    def prepare_loadout(self) -> None:
+        """Stáhne video (nebo použije lokální), vytáhne první snímek a otevře editor loadoutu."""
+        src = self.url_var.get().strip()
+        if not src:
+            self.status.configure(text="Vlož nebo vyber video.", text_color=RED)
+            return
+        if self.worker and self.worker.is_alive():
+            return
+        cfg = copy.deepcopy(self.cfg)
+        self.prep_btn.configure(state="disabled")
+        self.status.configure(text="Připravuji snímek pro loadout…", text_color=MUTED)
+        rep = Reporter(log=lambda m: self.events.put(("log", m)),
+                       progress=lambda f, t: self.events.put(("progress", f, t)))
+
+        def job() -> None:
+            try:
+                video, vid, _downloaded = core.get_source(src, cfg, rep)
+                probe = core.probe_video(video)
+                frame = core.extract_frame(video, core.work_root(cfg) / "frames" / f"{vid}.png", 1.0)
+                lo = core.last_loadout(cfg) or core.default_loadout("short", probe["width"], probe["height"])
+                self.events.put(("prep_done", {"video_id": vid, "probe": probe, "frame": str(frame)}, lo))
+            except Exception as exc:  # noqa: BLE001
+                self.events.put(("prep_error", str(exc)))
+        threading.Thread(target=job, daemon=True).start()
+
+    def apply_loadout(self, lo: dict) -> None:
+        self.current_loadout = lo
+        self.loadout_label.configure(text=f"Loadout: {lo['name']}")
+        self.show("create")
+        self.status.configure(text=f"Loadout „{lo['name']}“ je nastavený pro toto video.", text_color=GREEN)
 
     def _feedback(self, folder: Path, clip: dict, good: bool, btn_row) -> None:
         record_feedback(self.cfg, clip, good)
@@ -776,7 +937,8 @@ class App(ctk.CTk):
             ctk.CTkLabel(scroll, text=title.upper(), font=fnt(12, True), text_color=ORANGE
                          ).pack(anchor="w", pady=(18, 6), padx=4)
             for f in fields:
-                self._setting_row(scroll, sec, f)
+                if f.show:
+                    self._setting_row(scroll, sec, f)
 
         yt_card = self._card(scroll)
         yt_card.pack(fill="x", pady=(18, 4), padx=2)
@@ -858,6 +1020,8 @@ class App(ctk.CTk):
     def _populate_settings(self, values: dict) -> None:
         for sec, _title, fields in SECTIONS:
             for f in fields:
+                if (sec, f.key) not in self.setting_widgets:
+                    continue
                 kind, widget = self.setting_widgets[(sec, f.key)]
                 value = values[sec][f.key]
                 if kind == "bool":
@@ -868,9 +1032,11 @@ class App(ctk.CTk):
                     widget.set(str(value))
 
     def save_settings(self) -> None:
-        new = copy.deepcopy(default_settings())
+        new = copy.deepcopy(self.cfg)  # skrytá (automatická) nastavení zůstanou beze změny
         for sec, _title, fields in SECTIONS:
             for f in fields:
+                if (sec, f.key) not in self.setting_widgets:
+                    continue
                 kind, widget = self.setting_widgets[(sec, f.key)]
                 raw = widget.get() if kind != "bool" else widget.get()
                 try:

@@ -105,25 +105,26 @@ def _size(path: Path) -> int:
 
 # ---------------------------------------------------------------- profily a rychlost
 
-CONTENT_PRESETS = {
-    "gaming": {"min": 25, "max": 90, "weights": {
-        "hook": 25, "emotion": 30, "standalone": 10, "payoff": 15, "humor": 15, "pacing": 5}},
-    "vlog": {"min": 30, "max": 75, "weights": {
-        "hook": 20, "emotion": 15, "standalone": 30, "payoff": 20, "humor": 5, "pacing": 10}},
-    "long_form": {"min": 60, "max": 180, "weights": {
-        "hook": 15, "emotion": 15, "standalone": 25, "payoff": 30, "humor": 5, "pacing": 10}},
+FORMAT_WEIGHTS = {
+    "short": {"hook": 25, "emotion": 20, "standalone": 15, "payoff": 15, "humor": 10, "pacing": 15},
+    "long": {"hook": 15, "emotion": 15, "standalone": 25, "payoff": 30, "humor": 5, "pacing": 10},
 }
 
 
 def apply_profile(cfg: dict) -> dict:
-    """Typ obsahu přepíše délky a váhy. 'shorts' nechá hodnoty z nastavení."""
+    """Formát klipů nastaví délky a váhy hodnocení. Short-form max 60 s, long-form 1 až 60 min."""
     out = copy.deepcopy(cfg)
-    preset = CONTENT_PRESETS.get(out["clips"]["content_type"])
-    if preset:
-        out["clips"]["min_seconds"] = preset["min"]
-        out["clips"]["max_seconds"] = preset["max"]
-        for key, val in preset["weights"].items():
-            out["scoring"][f"weight_{key}"] = val
+    c = out["clips"]
+    if c["format"] == "long":
+        c["min_seconds"] = 60
+        c["max_seconds"] = int(c["long_minutes"]) * 60
+        weights = FORMAT_WEIGHTS["long"]
+    else:
+        c["min_seconds"] = 20
+        c["max_seconds"] = min(60, int(c["max_seconds"]))
+        weights = FORMAT_WEIGHTS["short"]
+    for key, val in weights.items():
+        out["scoring"][f"weight_{key}"] = val
     return out
 
 
@@ -309,9 +310,15 @@ def get_source(source: str, cfg: dict, rep: Reporter) -> tuple[Path, str, bool]:
 
     def hook(data: dict) -> None:
         rep.check()
-        if data.get("status") == "downloading" and data.get("total_bytes"):
-            frac = data.get("downloaded_bytes", 0) / data["total_bytes"]
-            rep.progress(0.25 * frac, f"Stahuji video {frac * 100:.0f} %")
+        if data.get("status") != "downloading":
+            return
+        total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
+        done = data.get("downloaded_bytes", 0)
+        if total:
+            frac = min(1.0, done / total)
+            rep.progress(0.25 * frac,
+                         f"Stahuji video {done / 1024 ** 3:.2f} / {total / 1024 ** 3:.2f} GB "
+                         f"({frac * 100:.0f} %)")
 
     opts = dict(base_opts)
     opts.update({
@@ -659,6 +666,7 @@ def parse_srt(path: Path) -> list[tuple[float, float, str]]:
 
 POSITION_ALIGN = {"bottom": 2, "middle": 5, "top": 8}
 EFFECT_KINDS = ["none", "fade", "unblur", "shake"]
+LOADOUT_MAX_VIEWS = 5
 
 
 def default_effects() -> dict:
@@ -666,76 +674,240 @@ def default_effects() -> dict:
             "image_y": 0.4, "image_scale": 0.3, "image_start": 0.0, "image_end": 0.0}
 
 
-def video_filter_graph(effects: dict, w: int, h: int, duration: float,
-                       subs: Optional[tuple[str, str]], has_image: bool) -> str:
-    """Složí filter_complex: střih 9:16, efekt na začátku, titulky, obrázek.
+def _even(n: float) -> int:
+    n = int(round(n))
+    return max(2, n - n % 2)
 
-    Vstupy: 0 = video, 1 = obrázek (pokud has_image). Výstup je [vout].
-    """
+
+# ---------------------------------------------------------------- údaje o VODu (ffprobe)
+
+def ffprobe_bin() -> str:
+    bundled = ROOT / "ffmpeg" / "ffprobe.exe"
+    return str(bundled) if bundled.exists() else "ffprobe"
+
+
+def probe_video(path: Path) -> dict:
+    """Délka, rozlišení, snímky za sekundu a bitrate videa."""
+    cmd = [ffprobe_bin(), "-v", "error", "-print_format", "json",
+           "-show_format", "-show_streams", str(path)]
+    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", check=True).stdout
+    data = json.loads(out)
+    v = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), {})
+    fmt = data.get("format", {})
+    try:
+        n, d = (v.get("avg_frame_rate") or "30/1").split("/")
+        fps = float(n) / float(d) if float(d) else 30.0
+    except ValueError:
+        fps = 30.0
+    bitrate = int(fmt.get("bit_rate") or v.get("bit_rate") or 0) // 1000
+    return {"duration": float(fmt.get("duration") or 0), "width": int(v.get("width") or 1920),
+            "height": int(v.get("height") or 1080), "fps": round(fps, 2), "kbps": bitrate}
+
+
+def extract_frame(video: Path, out_png: Path, at: float = 1.0) -> Path:
+    """Uloží jeden snímek videa (pro loadout)."""
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{at:.2f}",
+           "-i", str(video), "-frames:v", "1", str(out_png)]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return out_png
+
+
+def auto_output(cfg: dict, probe: dict) -> dict:
+    """Výstup podle VODu a formátu: rozlišení, snímky, CRF podle bitrate zdroje."""
+    o = cfg["output"]
+    short = cfg["clips"]["format"] == "short"
+    sw, sh = probe["width"], probe["height"]
+    if short:
+        w, h = (1080, 1920) if sh >= 1080 else (720, 1280)
+    else:
+        w = min(sw, 1920)
+        w = _even(w)
+        h = _even(w * sh / sw)
+    fps = 60 if probe.get("fps", 30) >= 50 else 30
+    kbps = probe.get("kbps") or 0
+    spec = {"width": w, "height": h, "fps": fps,
+            "crf": 21 if kbps >= 5000 else 23, "preset": "veryfast", "audio_bitrate": "160k"}
+    o.update(spec)
+    return spec
+
+
+# ---------------------------------------------------------------- loadouty
+
+def default_loadout(fmt: str, src_w: int, src_h: int, effects: Optional[dict] = None) -> dict:
+    """Výchozí rozložení: short-form = střed 9:16 z rámce, long-form = celý rámec."""
     fx = {**default_effects(), **(effects or {})}
-    kind = fx["intro"] if fx["intro"] in EFFECT_KINDS else "none"
-    d = max(0.1, float(fx["intro_seconds"]))
-    counter = [0]
+    if fmt == "short":
+        cw = min(1.0, (9 / 16) * src_h / src_w)
+        crop = [round(0.5 - cw / 2, 4), 0.0, round(cw, 4), 1.0]
+    else:
+        crop = [0.0, 0.0, 1.0, 1.0]
+    views = [{"crop": crop, "place": [0.0, 0.0, 1.0, 1.0],
+              "anim": fx["intro"] if fx["intro"] in EFFECT_KINDS else "none",
+              "anim_seconds": float(fx["intro_seconds"])}]
+    photos = []
+    if fx.get("image"):
+        s = float(fx["image_scale"])
+        photos.append({"path": fx["image"],
+                       "place": [round(float(fx["image_x"]) - s / 2, 4),
+                                 round(float(fx["image_y"]) - s / 2, 4), s, s],
+                       "anim": "none", "anim_seconds": 0.6,
+                       "start": float(fx["image_start"]), "end": float(fx["image_end"])})
+    return {"name": "výchozí", "background": "#000000", "views": views, "photos": photos}
 
-    def new() -> str:
-        counter[0] += 1
-        return f"v{counter[0]}"
 
-    stages: list[str] = []
-    cur = new()
-    stages.append(f"[0:v]crop=trunc(ih*{w}/{h}/2)*2:ih,scale={w}:{h},setsar=1[{cur}]")
+def clean_loadout(lo: dict) -> dict:
+    """Ořízne seznamy na povolené délky a doplní chybějící pole."""
+    out = {"name": str(lo.get("name", "loadout")), "background": lo.get("background", "#000000"),
+           "views": [], "photos": []}
+    for v in lo.get("views", [])[:LOADOUT_MAX_VIEWS]:
+        out["views"].append({"crop": [float(x) for x in v["crop"]],
+                             "place": [float(x) for x in v["place"]],
+                             "anim": v.get("anim", "none") if v.get("anim") in EFFECT_KINDS else "none",
+                             "anim_seconds": float(v.get("anim_seconds", 0.6))})
+    for p in lo.get("photos", []):
+        out["photos"].append({"path": str(p["path"]), "place": [float(x) for x in p["place"]],
+                              "anim": p.get("anim", "none") if p.get("anim") in EFFECT_KINDS else "none",
+                              "anim_seconds": float(p.get("anim_seconds", 0.6)),
+                              "start": float(p.get("start", 0)), "end": float(p.get("end", 0))})
+    return out
 
+
+def loadout_dir(cfg: dict) -> Path:
+    d = work_root(cfg) / "loadouts"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def list_loadouts(cfg: dict) -> list[str]:
+    return sorted(p.stem for p in loadout_dir(cfg).glob("*.json") if p.stem != "_last")
+
+
+def load_loadout(cfg: dict, name: str) -> Optional[dict]:
+    path = loadout_dir(cfg) / f"{slugify(name)}.json"
+    if not path.exists():
+        return None
+    return clean_loadout(json.loads(path.read_text(encoding="utf-8")))
+
+
+def save_loadout(cfg: dict, lo: dict) -> str:
+    lo = clean_loadout(lo)
+    name = slugify(lo["name"]) or "loadout"
+    (loadout_dir(cfg) / f"{name}.json").write_text(
+        json.dumps(lo, ensure_ascii=False, indent=1), encoding="utf-8")
+    return name
+
+
+def last_loadout(cfg: dict) -> Optional[dict]:
+    path = loadout_dir(cfg) / "_last.json"
+    if path.exists():
+        try:
+            return clean_loadout(json.loads(path.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return None
+    return None
+
+
+def remember_loadout(cfg: dict, lo: dict) -> None:
+    """Poslední použitý loadout se načte i u dalšího VODu."""
+    (loadout_dir(cfg) / "_last.json").write_text(
+        json.dumps(clean_loadout(lo), ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+# ---------------------------------------------------------------- filtrový graf
+
+def _anim_chain(src: str, out: str, kind: str, d: float, w: int, h: int, tag: str) -> str:
+    """Animace na začátku jednoho záběru nebo fotky. Bez [vstup] na začátku."""
+    d = max(0.1, float(d))
+    if kind == "fade":
+        return f"[{src}]fade=t=in:st=0:d={d}[{out}]"
     if kind == "unblur":
-        a, b, c = new(), new(), new()
-        stages.append(f"[{cur}]split[{a}][{b}]")
-        stages.append(f"[{b}]boxblur=20:2,format=rgba,fade=t=out:st=0:d={d}:alpha=1[{c}]")
-        out = new()
-        stages.append(f"[{a}][{c}]overlay[{out}]")
-        cur = out
-    elif kind == "shake":
+        a, b, c = f"{tag}a", f"{tag}b", f"{tag}c"
+        return (f"[{src}]split[{a}][{b}];"
+                f"[{b}]boxblur=20:2,format=rgba,fade=t=out:st=0:d={d}:alpha=1[{c}];"
+                f"[{a}][{c}]overlay[{out}]")
+    if kind == "shake":
         amp = max(2, int(w * 0.02))
-        out = new()
-        stages.append(
-            f"[{cur}]crop={w - 2 * amp}:{h - 2 * amp}"
-            f":x='{amp}+{amp}*sin(t*45)*max(0,1-t/{d})'"
-            f":y='{amp}+{amp}*cos(t*38)*max(0,1-t/{d})',scale={w}:{h}[{out}]")
-        cur = out
-    elif kind == "fade":
-        out = new()
-        stages.append(f"[{cur}]fade=t=in:st=0:d={d}[{out}]")
-        cur = out
+        return (f"[{src}]crop={w - 2 * amp}:{h - 2 * amp}"
+                f":x='{amp}+{amp}*sin(t*45)*max(0,1-t/{d})'"
+                f":y='{amp}+{amp}*cos(t*38)*max(0,1-t/{d})',scale={w}:{h}[{out}]")
+    return f"[{src}]null[{out}]"
 
+
+def loadout_graph(lo: dict, W: int, H: int, src_w: int, src_h: int, duration: float,
+                  photos: list[dict], subs: Optional[tuple[str, str]]) -> str:
+    """Složí filter_complex: záběry (vstup 0), fotky (vstupy 1..n), titulky, výstup [vout]."""
+    parts = []
+    bg = str(lo.get("background", "#000000")).lstrip("#")
+    parts.append(f"color=c=0x{bg}:s={W}x{H}:d={duration:.3f}[base0]")
+    cur = "base0"
+    for i, v in enumerate(lo["views"][:LOADOUT_MAX_VIEWS]):
+        cx, cy, cw, ch = v["crop"]
+        cw_px = min(src_w, _even(cw * src_w))
+        ch_px = min(src_h, _even(ch * src_h))
+        x_px = min(src_w - cw_px, max(0, int(cx * src_w)))
+        y_px = min(src_h - ch_px, max(0, int(cy * src_h)))
+        bx, by, bw, bh = v["place"]
+        pw, ph = _even(bw * W), _even(bh * H)
+        px, py = int(round(bx * W)), int(round(by * H))
+        parts.append(f"[0:v]crop={cw_px}:{ch_px}:{x_px}:{y_px},"
+                     f"scale={pw}:{ph}:force_original_aspect_ratio=increase,crop={pw}:{ph},"
+                     f"setsar=1,format=yuva420p[v{i}raw]")
+        parts.append(_anim_chain(f"v{i}raw", f"v{i}", v.get("anim", "none"),
+                                 v.get("anim_seconds", 0.6), pw, ph, f"tv{i}"))
+        nxt = f"o{i}"
+        parts.append(f"[{cur}][v{i}]overlay={px}:{py}[{nxt}]")
+        cur = nxt
+    for j, p in enumerate(photos):
+        bx, by, bw, bh = p["place"]
+        pw, ph = _even(bw * W), _even(bh * H)
+        px, py = int(round(bx * W)), int(round(by * H))
+        start = float(p.get("start", 0))
+        end = float(p.get("end", 0)) or duration
+        parts.append(f"[{j + 1}:v]scale={pw}:{ph}:force_original_aspect_ratio=decrease,"
+                     f"format=yuva420p,setpts=PTS-STARTPTS[p{j}raw]")
+        parts.append(_anim_chain(f"p{j}raw", f"p{j}", p.get("anim", "none"),
+                                 p.get("anim_seconds", 0.6), pw, ph, f"tp{j}"))
+        nxt = f"q{j}"
+        parts.append(f"[{cur}][p{j}]overlay=x='{px}+({pw}-w)/2':y='{py}+({ph}-h)/2'"
+                     f":enable='between(t,{start:.2f},{end:.2f})'[{nxt}]")
+        cur = nxt
     if subs:
-        out = new()
-        stages.append(f"[{cur}]subtitles={subs[0]}:force_style='{subs[1]}'[{out}]")
-        cur = out
+        parts.append(f"[{cur}]subtitles={subs[0]}:force_style='{subs[1]}',format=yuv420p[vout]")
+    else:
+        parts.append(f"[{cur}]format=yuv420p[vout]")
+    return ";".join(parts)
 
-    if has_image:
-        ix = min(1.0, max(0.0, float(fx["image_x"])))
-        iy = min(1.0, max(0.0, float(fx["image_y"])))
-        sc = min(1.0, max(0.05, float(fx["image_scale"])))
-        iw = max(16, int(w * sc) // 2 * 2)
-        s = max(0.0, float(fx["image_start"]))
-        e = float(fx["image_end"]) or duration
-        stages.append(f"[1:v]scale={iw}:-2,format=rgba[img]")
-        out = new()
-        stages.append(f"[{cur}][img]overlay=x='W*{ix:.4f}-w/2':y='H*{iy:.4f}-h/2'"
-                      f":enable='between(t,{s:.2f},{e:.2f})'[{out}]")
-        cur = out
 
-    stages.append(f"[{cur}]null[vout]")
-    return ";".join(stages)
+def caption_style(cap: dict) -> str:
+    return ",".join([
+        f"FontName={cap['font']}",
+        f"FontSize={int(cap['font_size'])}",
+        f"PrimaryColour={cap['text_color']}",
+        f"OutlineColour={cap['outline_color']}",
+        f"Outline={int(cap['outline_width'])}",
+        f"Shadow={int(cap['shadow'])}",
+        f"Bold={1 if cap['bold'] else 0}",
+        f"Alignment={POSITION_ALIGN.get(cap['position'], 2)}",
+        f"MarginV={int(cap['margin_v'])}",
+    ])
 
 
 def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
                 cfg: dict, index: int, rep: Reporter,
                 items_override: Optional[list] = None,
                 name_override: Optional[str] = None) -> Path:
-    """items_override: vlastní titulky (čas od začátku klipu, text) z editoru.
-    name_override: přepíše název souboru (použije se při přerenderování).
-    clip['effects']: animace na začátku a volitelná fotka (viz default_effects)."""
+    """Vystřihne klip podle loadoutu (short-form) nebo celého rámce (long-form).
+
+    clip['output_spec'] a clip['src_size'] drží parametry z doby běhu, takže přerenderování
+    v editoru dá stejný výsledek i bez znovu zjištěných údajů o VODu.
+    """
     o, cap = cfg["output"], cfg["captions"]
-    w, h = int(o["width"]), int(o["height"])
+    spec = clip.get("output_spec") or {"width": int(o["width"]), "height": int(o["height"]),
+                                       "fps": int(o["fps"]), "crf": int(o["crf"]),
+                                       "preset": o["preset"], "audio_bitrate": o["audio_bitrate"]}
+    W, H = int(spec["width"]), int(spec["height"])
 
     if name_override:
         name = name_override
@@ -748,11 +920,16 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
         name = slugify(name, 120)
 
     duration = float(clip["end"]) - float(clip["start"])
-    effects = {**default_effects(), **(clip.get("effects") or {})}
-    image = Path(effects["image"]) if effects.get("image") else None
-    if image and not image.exists():
-        rep.log(f"Fotka {image.name} nebyla nalezena, přeskakuji ji.")
-        image = None
+    src_w, src_h = clip.get("src_size") or [1920, 1080]
+    fmt = clip.get("format") or cfg["clips"]["format"]
+    if fmt == "short" and clip.get("loadout"):
+        lo = clean_loadout(clip["loadout"])
+    else:
+        lo = default_loadout(fmt, src_w, src_h, clip.get("effects"))
+    photos = [p for p in lo["photos"] if Path(p["path"]).exists()]
+    for p in lo["photos"]:
+        if p not in photos:
+            rep.log(f"Fotka {Path(p['path']).name} nebyla nalezena, přeskakuji ji.")
 
     subs = None
     if cap["enabled"]:
@@ -763,34 +940,23 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
                                   int(cap["words_per_caption"]), bool(cap["uppercase"]))
         srt_name = f"{name}.srt"
         write_srt(out_dir / srt_name, items)
-        style = ",".join([
-            f"FontName={cap['font']}",
-            f"FontSize={int(cap['font_size'])}",
-            f"PrimaryColour={cap['text_color']}",
-            f"OutlineColour={cap['outline_color']}",
-            f"Outline={int(cap['outline_width'])}",
-            f"Shadow={int(cap['shadow'])}",
-            f"Bold={1 if cap['bold'] else 0}",
-            f"Alignment={POSITION_ALIGN.get(cap['position'], 2)}",
-            f"MarginV={int(cap['margin_v'])}",
-        ])
-        subs = (srt_name, style)
+        subs = (srt_name, caption_style(cap))
 
-    graph = video_filter_graph(effects, w, h, duration, subs, image is not None)
+    graph = loadout_graph(lo, W, H, int(src_w), int(src_h), duration, photos, subs)
 
     out_file = out_dir / f"{name}.mp4"
     cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error",
            "-ss", f"{clip['start']:.3f}", "-i", str(video)]
-    if image is not None:
-        cmd += ["-loop", "1", "-i", str(image)]
-    cmd += ["-t", f"{duration:.3f}",
-            "-filter_complex", graph,
+    for p in photos:
+        cmd += ["-loop", "1", "-i", str(p["path"])]
+    cmd += ["-t", f"{duration:.3f}", "-filter_complex", graph,
             "-map", "[vout]", "-map", "0:a?",
-            "-r", str(int(o["fps"])),
-            "-c:v", "libx264", "-preset", o["preset"], "-crf", str(int(o["crf"])),
-            "-c:a", "aac", "-b:a", o["audio_bitrate"], "-movflags", "+faststart"]
-    if effects["intro"] == "fade":
-        d = max(0.1, float(effects["intro_seconds"]))
+            "-r", str(int(spec["fps"])),
+            "-c:v", "libx264", "-preset", str(spec["preset"]), "-crf", str(int(spec["crf"])),
+            "-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart"]
+    fade_views = [v for v in lo["views"] if v.get("anim") == "fade"]
+    if fade_views:
+        d = max(0.1, float(fade_views[0].get("anim_seconds", 0.6)))
         cmd += ["-af", f"afade=t=in:st=0:d={d}"]
     cmd.append(out_file.name)
 
@@ -819,7 +985,8 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
 # ---------------------------------------------------------------- hlavní běh
 
 def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
-            captions_override: Optional[bool] = None) -> dict:
+            captions_override: Optional[bool] = None,
+            loadout: Optional[dict] = None) -> dict:
     """Celý pipeline. Vrací {'out_dir': Path, 'clips': [...]} nebo vyhodí výjimku."""
     if not ffmpeg_available():
         raise RuntimeError("Chybí ffmpeg. Nainstaluj ho nebo přidej do PATH.")
@@ -829,6 +996,18 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
 
     rep.progress(0.0, "Začínám")
     video, video_id, downloaded = get_source(source, cfg, rep)
+    probe = probe_video(video)
+    spec = auto_output(cfg, probe)
+    fmt = cfg["clips"]["format"]
+    if fmt == "short":
+        loadout = clean_loadout(loadout) if loadout else (
+            last_loadout(cfg) or default_loadout("short", probe["width"], probe["height"]))
+        remember_loadout(cfg, loadout)
+    else:
+        loadout = None
+    rep.log(f"Video {probe['width']}x{probe['height']}, {probe['kbps']} kb/s, "
+            f"{probe['duration'] / 60:.0f} min. Výstup {spec['width']}x{spec['height']}, "
+            f"{spec['fps']} fps, CRF {spec['crf']}.")
     job = work_root(cfg) / "jobs" / video_id
     job.mkdir(parents=True, exist_ok=True)
 
@@ -857,6 +1036,10 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
         rep.log(f"Stříhám klip {i}/{len(chosen)} (hodnocení {clip['score']:.0f}): {clip['title']}")
         rep.progress(0.75 + 0.25 * (i - 1) / max(1, len(chosen)),
                      f"Stříhám klip {i}/{len(chosen)}")
+        clip["format"] = fmt
+        clip["src_size"] = [probe["width"], probe["height"]]
+        clip["output_spec"] = spec
+        clip["loadout"] = loadout
         render_clip(video, segments, clip, out_dir, cfg, i, rep)
 
     manifest = {"video_id": video_id, "created": datetime.now().isoformat(timespec="seconds"),
@@ -875,6 +1058,76 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
     rep.progress(1.0, "Hotovo")
     rep.log(f"Hotovo: {len(chosen)} klipů ve složce {out_dir}")
     return {"out_dir": out_dir, "clips": chosen}
+
+
+# ---------------------------------------------------------------- Ollama na pozadí
+
+def start_ollama_background(cfg: dict) -> bool:
+    """Při startu aplikace spustí Ollamu bez okna, když běží na tomto počítači a není spuštěná."""
+    if cfg["ai"]["provider"] != "ollama" or ollama_models(cfg) is not None or not ollama_installed():
+        return ollama_models(cfg) is not None
+    local = os.environ.get("LOCALAPPDATA", "")
+    exe = Path(local) / "Programs" / "Ollama" / "ollama.exe" if local else None
+    cmd = [str(exe) if exe and exe.exists() else "ollama", "serve"]
+    flags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
+    try:
+        subprocess.Popen(cmd, creationflags=flags, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except OSError:
+        return False
+    for _ in range(30):
+        time.sleep(0.5)
+        if ollama_models(cfg) is not None:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------- hledání videí na Kicku
+
+KICK_API = "https://kick.com/api/v2/channels/{slug}/{kind}"
+
+
+def _kick_item(raw: dict, slug: str, kind: str) -> Optional[dict]:
+    if kind == "videos":
+        ident = raw.get("uuid") or raw.get("video", {}).get("uuid") or raw.get("id")
+        title = raw.get("session_title") or raw.get("title") or "bez názvu"
+        url = f"https://kick.com/{slug}/videos/{ident}" if ident else ""
+    else:
+        ident = raw.get("id") or raw.get("clip_id")
+        title = raw.get("title") or "bez názvu"
+        url = f"https://kick.com/{slug}/clips/{ident}" if ident else ""
+    if not url:
+        return None
+    duration = raw.get("duration") or raw.get("length") or 0
+    try:
+        duration = float(duration)
+        seconds = duration / 1000 if duration > 100000 else duration  # některá API dávají ms
+    except (TypeError, ValueError):
+        seconds = 0.0
+    return {"title": str(title), "url": url, "created": str(raw.get("created_at", ""))[:16],
+            "seconds": seconds, "kind": kind,
+            "thumbnail": (raw.get("thumbnail") or {}).get("src", "")
+            if isinstance(raw.get("thumbnail"), dict) else (raw.get("thumbnail") or "")}
+
+
+def search_kick(channel: str, kinds: list[str], limit: int = 12) -> list[dict]:
+    """Nejnovější videa a/nebo klipy kanálu na Kicku. kinds: ['videos'] a/nebo ['clips']."""
+    slug = channel.strip().strip("/").split("/")[-1].lower()
+    if not slug:
+        raise ValueError("Zadej jméno kanálu, např. gasbyn.")
+    results: list[dict] = []
+    for kind in kinds:
+        r = requests.get(KICK_API.format(slug=slug, kind=kind), timeout=15,
+                         headers={"Accept": "application/json"})
+        r.raise_for_status()
+        data = r.json()
+        items = data if isinstance(data, list) else data.get("data", data.get("videos", []))
+        for raw in items or []:
+            item = _kick_item(raw, slug, kind)
+            if item:
+                results.append(item)
+    results.sort(key=lambda x: x["created"], reverse=True)
+    return results[:limit]
 
 
 # ---------------------------------------------------------------- připravenost (první spuštění)
@@ -971,4 +1224,7 @@ def save(cfg: dict) -> None:
 __all__ = ["run_job", "Reporter", "Cancelled", "load_or_default", "save", "cache_report",
            "clean_cache", "auto_clean", "check_environment", "ROOT", "SETTINGS_FILE",
            "default_settings", "ffmpeg_available", "record_feedback", "render_clip",
-           "parse_srt", "get_source", "default_effects", "EFFECT_KINDS"]
+           "parse_srt", "get_source", "default_effects", "EFFECT_KINDS", "probe_video",
+           "extract_frame", "default_loadout", "clean_loadout", "list_loadouts", "load_loadout",
+           "save_loadout", "last_loadout", "remember_loadout", "start_ollama_background",
+           "search_kick"]
