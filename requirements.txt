@@ -7,3 +7,5 @@ google-api-python-client
 google-auth-oauthlib
 pillow
 pystray
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
