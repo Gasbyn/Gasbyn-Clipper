@@ -1,6 +1,6 @@
 # Gasbyn Clipper
 
-AI klipovač pro Windows. Vezme VOD z Kicku (nebo YouTube, nebo lokální video), AI najde momenty, každému dá **hodnocení 0 až 100** a vystřihne vertikální klipy 9:16 s titulky. Klipy pod nastaveným prahem se nevytvoří.
+AI klipovač pro Windows. Vezme VOD z Kicku (nebo YouTube, nebo lokální video), AI najde momenty, každému dá **hodnocení 0 až 100** a vystřihne vertikální klipy 9:16 s titulky. Nízké skóre samo o sobě moment nevyřadí; všechny vhodné momenty dostanou skóre 0–100.
 
 ## Instalace (Windows 10/11)
 
@@ -69,7 +69,7 @@ Každý klip označený 👍 nebo 👎 se uloží do `work/learning.json`. Při 
 
 ## Hodnocení kvality
 
-Každý navržený klip dostane skóre 0 až 100 jako vážený průměr těchto kritérií:
+Každý navržený klip dostane skóre 0 až 100 jako orientační potenciál zhlédnutí. Vyšší číslo znamená vyšší odhadovaný výkon. Nízké skóre moment automaticky nevyřazuje. Kritéria jsou:
 
 | Kritérium | Co měří |
 |-----------|---------|
@@ -80,7 +80,7 @@ Každý navržený klip dostane skóre 0 až 100 jako vážený průměr těchto
 | Humor | Jak je vtipný? |
 | Tempo | Heuristika z přepisu, ideál 2 až 3,2 slova za sekundu |
 
-Váhy kritérií se nastavují automaticky podle formátu (short-form, long-form). Práh **Minimální hodnocení** v sekci **Vytvořit klipy** určuje, které klipy se vůbec nevytvoří.
+Váhy kritérií se nastavují automaticky podle formátu (short-form, long-form). Odhad views se v této verzi připravuje z vlastních statistik YouTube po opětovném připojení účtu s oprávněním ke čtení.
 
 Hodnocení AI se ukládá do cache. Když později změníš práh nebo váhy, výběr se přepočítá bez nového volání AI. Novou AI analýzu vynutíš zaškrtnutím *Znovu zavolat AI*.
 
@@ -107,7 +107,7 @@ YouTube se připojuje přes oficiální YouTube Data API. Zdarma, ale potřebuje
 4. V Nastavení vyber ten JSON v poli *Soubor client_secret*, ulož nastavení.
 5. Na stránce Nastavení klikni na **Připojit účet** a přihlas se v prohlížeči.
 
-Pak v editoru klikni na **Nahrát na YouTube**. Výchozí viditelnost je `private`.
+Pak v editoru klikni na **Nahrát na YouTube**. Po instalaci verze s personalizovaným odhadem klikni v Nastavení znovu na **Připojit účet** a potvrď nové oprávnění pro čtení statistik kanálu. Výchozí viditelnost je `private`.
 
 **Limity, které musíš znát:**
 - Denní kvóta je obvykle 10 000 jednotek a jedno nahrání stojí přibližně 1 600. Vyjde to zhruba na 6 nahrání za den.

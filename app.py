@@ -576,7 +576,7 @@ class App(ctk.CTk):
         card.pack(fill="x", pady=(0, 14))
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(fill="x", padx=20, pady=16)
-        ctk.CTkLabel(inner, text="Najít video na platformě", font=fnt(13, True), text_color=TEXT
+        ctk.CTkLabel(inner, text="Knihovna kanálu Kick", font=fnt(13, True), text_color=TEXT
                      ).pack(anchor="w")
         row = ctk.CTkFrame(inner, fg_color="transparent")
         row.pack(fill="x", pady=(10, 0))
@@ -597,7 +597,7 @@ class App(ctk.CTk):
         ctk.CTkCheckBox(row, text="Klipy a shorty", variable=self.kind_clips, fg_color=ORANGE,
                         hover_color=ORANGE_LIGHT, border_color=BORDER, font=fnt(12),
                         text_color=TEXT).pack(side="left", padx=(14, 0))
-        self.search_btn = ctk.CTkButton(row, text="Hledat", width=100, height=34, corner_radius=9,
+        self.search_btn = ctk.CTkButton(row, text="Načíst kanál", width=110, height=34, corner_radius=9,
                                         fg_color=ORANGE, hover_color=ORANGE_LIGHT,
                                         text_color="white", font=fnt(12, True),
                                         command=self.search_videos)
@@ -614,11 +614,11 @@ class App(ctk.CTk):
             return
         channel = self.channel_var.get()
         self.search_btn.configure(state="disabled")
-        self.search_status.configure(text="Hledám nejnovější…", text_color=MUTED)
+        self.search_status.configure(text="Načítám VODy a klipy kanálu…", text_color=MUTED)
 
         def job() -> None:
             try:
-                items = core.search_kick(channel, kinds, limit=12)
+                items = core.search_kick(channel, kinds, limit=1000)
             except Exception as exc:  # noqa: BLE001
                 self.events.put(("search_error", str(exc)))
                 return
@@ -983,7 +983,10 @@ class App(ctk.CTk):
         score = float(clip.get("score", 0))
         ctk.CTkLabel(right, text=f"{score:.0f}", font=fnt(30, True), text_color=score_color(score)
                      ).pack(anchor="e")
-        ctk.CTkLabel(right, text="/ 100 hodnocení", font=fnt(10), text_color=MUTED).pack(anchor="e")
+        ctk.CTkLabel(right, text="/ 100 potenciál views", font=fnt(10), text_color=MUTED).pack(anchor="e")
+        estimate = clip.get("estimated_views")
+        estimate_text = f"~{estimate:,} views" if estimate is not None else "Odhad views: bez dat"
+        ctk.CTkLabel(right, text=estimate_text, font=fnt(11, True), text_color=ORANGE_LIGHT).pack(anchor="e", pady=(3, 0))
 
         btns = ctk.CTkFrame(right, fg_color="transparent")
         btns.pack(anchor="e", pady=(10, 0))

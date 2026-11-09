@@ -186,7 +186,6 @@ def apply_speed(cfg: dict) -> dict:
         out["transcription"]["beam_size"] = 1
         out["ai"]["chunk_minutes"] = max(int(out["ai"]["chunk_minutes"]), 45)
         out["ai"]["ollama_num_ctx"] = min(int(out["ai"]["ollama_num_ctx"]), 8192)
-        out["ai"]["_meta"] = False
     elif mode == "kvalitní":
         out["transcription"]["beam_size"] = max(int(out["transcription"]["beam_size"]), 5)
         out["ai"]["chunk_minutes"] = min(int(out["ai"]["chunk_minutes"]), 20)
@@ -455,10 +454,10 @@ def transcribe(video: Path, out_json: Path, cfg: dict, rep: Reporter) -> list[di
 
 # ---------------------------------------------------------------- 3. AI hodnocení
 
-PROMPT = """You are an expert short-form video editor (YouTube Shorts, TikTok, Instagram Reels). You find moments in a long livestream that can go viral.
+PROMPT = """You are an expert short-form video editor (YouTube Shorts, TikTok, Instagram Reels). You estimate which moments are most likely to earn views on this creator channel. A higher score means higher expected views, not merely a technically polished clip.
 {context}
 For each clip candidate, score honestly from 0 to 100 on each criterion:
-- hook: does the first 3 seconds grab attention (surprise, question, bold claim, conflict)?
+- view_potential: expected ability to attract views compared with this creator past Shorts; use supplied channel examples when available. 50 is around typical performance, 80+ is notably stronger, below 30 is weak.\n- hook: does the first 3 seconds grab attention (surprise, question, bold claim, conflict)?
 - emotion: strength of emotion (laughter, shock, anger, excitement, tension).
 - standalone: understandable without knowing the rest of the stream?
 - payoff: does it end on a punchline, resolution or strong moment?
@@ -468,14 +467,14 @@ Rules:
 - Start and end on natural sentence boundaries, using the timestamps given.
 - Clip length between {min} and {max} seconds.
 - Skip small talk, dead air, sponsor reads, repetition and filler.
-- Return at most {n} clips from this part, best first. Return an empty list if nothing is good. Do not invent moments that are not in the transcript.
+- Return up to {n} usable moments from this part, best first. Do NOT reject a moment just because it seems weak or its score is low; score honestly across the full 0-100 range. Return an empty list only if there is no coherent moment in the transcript. Do not invent moments that are not in the transcript.
 - title: catchy, at most 60 characters, in the same language as the transcript.
 {meta}
 - reason: one short sentence on why this clip works.
 {extra}
 {learn}
 Respond ONLY with JSON in this exact shape:
-{{"clips": [{{"start": 0.0, "end": 0.0, "hook": 0, "emotion": 0, "standalone": 0, "payoff": 0, "humor": 0, "title": "", "description": "", "hashtags": [], "reason": ""}}]}}"""
+{{"clips": [{{"start": 0.0, "end": 0.0, "view_potential": 0, "hook": 0, "emotion": 0, "standalone": 0, "payoff": 0, "humor": 0, "title": "", "description": "", "hashtags": [], "reason": ""}}]}}"""
 
 META_ON = ("- description: one or two sentences.\n"
            "- hashtags: 3 to 5 hashtags without spaces.")
@@ -488,7 +487,8 @@ def build_prompt(cfg: dict, n: int) -> str:
     context = f"Channel context: {ai['channel_context']}" if ai["channel_context"].strip() else ""
     extra = f"Extra instructions from the creator: {ai['extra_instructions']}" if ai["extra_instructions"].strip() else ""
     meta = META_ON if ai.get("_meta", True) else META_OFF
-    return (PROMPT.replace("{context}", context)
+    youtube_context = ai.get("youtube_context", "")
+    return (PROMPT.replace("{context}", context + ("\n\n" + youtube_context if youtube_context else ""))
             .replace("{min}", str(c["min_seconds"]))
             .replace("{max}", str(c["max_seconds"]))
             .replace("{n}", str(n))
@@ -616,6 +616,7 @@ def score_with_ai(segments: list[dict], cfg: dict, rep: Reporter) -> list[dict]:
             candidates.append({
                 "start": round(s, 2),
                 "end": round(e, 2),
+                "view_potential": clamp(float(clip.get("view_potential", 50) or 50)),
                 "hook": clamp(float(clip.get("hook", 0) or 0)),
                 "emotion": clamp(float(clip.get("emotion", 0) or 0)),
                 "standalone": clamp(float(clip.get("standalone", 0) or 0)),
@@ -643,7 +644,9 @@ def final_score(cand: dict, cfg: dict) -> float:
     if total <= 0:
         return 0.0
     weighted = sum(cand[k] * w for k, w in weights.items())
-    return round(clamp(weighted / total), 1)
+    quality = weighted / total
+    view_potential = float(cand.get("view_potential", quality))
+    return round(clamp(quality * 0.5 + view_potential * 0.5), 1)
 
 
 def select_clips(candidates: list[dict], cfg: dict, duration: float) -> list[dict]:
@@ -660,8 +663,7 @@ def select_clips(candidates: list[dict], cfg: dict, duration: float) -> list[dic
             continue
         item = dict(cand)
         item["score"] = final_score(cand, cfg)
-        if item["score"] >= c["min_score"]:
-            pool.append(item)
+        pool.append(item)
     pool.sort(key=lambda x: x["score"], reverse=True)
 
     def overlap(a: dict, b: dict) -> float:
@@ -1150,7 +1152,7 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
         tags = " ".join(clip.get("hashtags", []))
         (out_dir / f"{name}.txt").write_text(
             f"{clip['title']}\n\n{clip.get('description', '')}\n\n{tags}\n\n"
-            f"Hodnocení: {clip.get('score', 0):.0f}/100\n"
+            f"Potenciál: {clip.get('score', 0):.0f}/100\n"
             f"Čas ve streamu: {clip['start']:.0f}s - {clip['end']:.0f}s\n"
             f"Hook {clip.get('hook', 0):.0f} | emoce {clip.get('emotion', 0):.0f} | srozumitelnost "
             f"{clip.get('standalone', 0):.0f} | pointa {clip.get('payoff', 0):.0f} | humor "
@@ -1163,6 +1165,23 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
 
 
 # ---------------------------------------------------------------- hlavní běh
+
+
+def format_youtube_history(history: dict) -> str:
+    videos = history.get("videos", [])
+    if not videos:
+        return ""
+    top = sorted(videos, key=lambda x: x.get("views_per_day", 0), reverse=True)[:5]
+    low = sorted(videos, key=lambda x: x.get("views_per_day", 0))[:5]
+    lines = ["Creator's own recent YouTube Shorts performance. Learn topic/title patterns; views/day is age-adjusted:"]
+    if top:
+        lines.append("Better-performing examples:")
+        lines.extend(f"- {v.get('title','')}: {v.get('views',0)} views, {v.get('views_per_day',0):.1f} views/day" for v in top)
+    if low:
+        lines.append("Lower-performing examples:")
+        lines.extend(f"- {v.get('title','')}: {v.get('views',0)} views, {v.get('views_per_day',0):.1f} views/day" for v in low)
+    return "\n".join(lines)
+
 
 def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
             captions_override: Optional[bool] = None,
@@ -1197,6 +1216,17 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
     duration = segments[-1]["end"]
     rep.progress(0.55, "Přepis hotový")
 
+    history = {"videos": [], "median_views": 0, "sample_size": 0}
+    try:
+        import youtube
+        history = youtube.fetch_short_performance(DATA_ROOT, limit=50)
+        cfg["ai"]["youtube_context"] = format_youtube_history(history)
+        if history.get("sample_size"):
+            rep.log(f"YouTube: načteno {history['sample_size']} vlastních krátkých videí; "
+                    f"medián odhadnutý na 7 dní je {history['median_views']} views.")
+    except Exception as exc:
+        rep.log(f"YouTube statistiky nejsou dostupné ({exc}); pokračuji bez personalizace.")
+
     cand_path = job / "candidates.json"
     if cand_path.exists() and not reselect:
         rep.log("Hodnocení AI je v cache, nevolám AI znovu (změna nastavení se projeví hned).")
@@ -1206,8 +1236,14 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
         cand_path.write_text(json.dumps(candidates, ensure_ascii=False, indent=1), encoding="utf-8")
 
     chosen = select_clips(candidates, cfg, duration)
-    rep.log(f"AI navrhla {len(candidates)} momentů, prahem {cfg['clips']['min_score']}/100 "
-            f"prošlo {len(chosen)} klipů.")
+    baseline = int(history.get("median_views") or 0)
+    for clip in chosen:
+        clip["estimated_views"] = (
+            round((baseline * (0.25 + float(clip["score"]) / 100.0 * 1.5)) / 10) * 10
+            if baseline > 0 else None
+        )
+    rep.log(f"AI navrhla {len(candidates)} momentů; po kontrole délky a překryvu zůstalo "
+            f"{len(chosen)} klipů. Skóre žádný moment automaticky nevyřazuje.")
 
     out_dir = DATA_ROOT / cfg["output"]["folder"] / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1297,25 +1333,57 @@ def _kick_item(raw: dict, slug: str, kind: str) -> Optional[dict]:
             if isinstance(raw.get("thumbnail"), dict) else (raw.get("thumbnail") or "")}
 
 
-def search_kick(channel: str, kinds: list[str], limit: int = 12) -> list[dict]:
-    """Nejnovější videa a/nebo klipy kanálu na Kicku. kinds: ['videos'] a/nebo ['clips']."""
+def search_kick(channel: str, kinds: list[str], limit: int = 1000) -> list[dict]:
+    """Načte VODy a klipy kanálu; VODy omezuje na 7 dní, klipy stránkuje."""
     slug = channel.strip().strip("/").split("/")[-1].lower()
     if not slug:
         raise ValueError("Zadej jméno kanálu, např. gasbyn.")
     results: list[dict] = []
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Referer": f"https://kick.com/{slug}",
+    }
     for kind in kinds:
-        r = requests.get(KICK_API.format(slug=slug, kind=kind), timeout=15,
-                         headers={"Accept": "application/json"})
-        r.raise_for_status()
-        data = r.json()
-        items = data if isinstance(data, list) else data.get("data", data.get("videos", []))
-        for raw in items or []:
-            item = _kick_item(raw, slug, kind)
-            if item:
-                results.append(item)
-    results.sort(key=lambda x: x["created"], reverse=True)
-    return results[:limit]
+        cursor = None
+        for _page in range(100 if kind == "clips" else 1):
+            params = {"cursor": cursor} if cursor else None
+            r = requests.get(KICK_API.format(slug=slug, kind=kind), params=params,
+                             timeout=20, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            items = data if isinstance(data, list) else data.get("data", data.get("videos", []))
+            if isinstance(items, dict):
+                items = items.get("clips", items.get("videos", []))
+            for raw in items or []:
+                item = _kick_item(raw, slug, kind)
+                if item:
+                    results.append(item)
+            if kind != "clips" or not isinstance(data, dict):
+                break
+            meta = data.get("pagination") or data.get("meta") or {}
+            next_cursor = (data.get("next_cursor") or data.get("cursor")
+                           or meta.get("next_cursor") or meta.get("nextCursor"))
+            if not next_cursor or str(next_cursor) == str(cursor):
+                break
+            cursor = next_cursor
 
+    from datetime import timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    filtered = []
+    for item in results:
+        if item["kind"] == "videos":
+            try:
+                stamp = datetime.fromisoformat(item["created"].replace("Z", "+00:00"))
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=timezone.utc)
+                if stamp < cutoff:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        filtered.append(item)
+    filtered.sort(key=lambda x: x["created"], reverse=True)
+    return filtered[:limit]
 
 def stop_ollama() -> None:
     """Při ukončení Gasbyn Clipperu vypne i Ollamu (server i tray aplikaci)."""
