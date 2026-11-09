@@ -107,7 +107,7 @@ YouTube se připojuje přes oficiální YouTube Data API. Zdarma, ale potřebuje
 4. V Nastavení vyber ten JSON v poli *Soubor client_secret*, ulož nastavení.
 5. Na stránce Nastavení klikni na **Připojit účet** a přihlas se v prohlížeči.
 
-Pak v editoru klikni na **Nahrát na YouTube**. Výchozí viditelnost je `private`.
+Pak v editoru klikni na **Nahrát na YouTube**. Po instalaci verze s personalizovaným odhadem klikni v Nastavení znovu na **Připojit účet** a potvrď nové oprávnění pro čtení statistik kanálu. Výchozí viditelnost je `private`.
 
 **Limity, které musíš znát:**
 - Denní kvóta je obvykle 10 000 jednotek a jedno nahrání stojí přibližně 1 600. Vyjde to zhruba na 6 nahrání za den.
