@@ -186,7 +186,6 @@ def apply_speed(cfg: dict) -> dict:
         out["transcription"]["beam_size"] = 1
         out["ai"]["chunk_minutes"] = max(int(out["ai"]["chunk_minutes"]), 45)
         out["ai"]["ollama_num_ctx"] = min(int(out["ai"]["ollama_num_ctx"]), 8192)
-        out["ai"]["_meta"] = False
     elif mode == "kvalitní":
         out["transcription"]["beam_size"] = max(int(out["transcription"]["beam_size"]), 5)
         out["ai"]["chunk_minutes"] = min(int(out["ai"]["chunk_minutes"]), 20)
@@ -468,7 +467,7 @@ Rules:
 - Start and end on natural sentence boundaries, using the timestamps given.
 - Clip length between {min} and {max} seconds.
 - Skip small talk, dead air, sponsor reads, repetition and filler.
-- Return at most {n} clips from this part, best first. Return an empty list if nothing is good. Do not invent moments that are not in the transcript.
+- Return up to {n} usable moments from this part, best first. Do NOT reject a moment just because it seems weak or its score is low; score honestly across the full 0-100 range. Return an empty list only if there is no coherent moment in the transcript. Do not invent moments that are not in the transcript.
 - title: catchy, at most 60 characters, in the same language as the transcript.
 {meta}
 - reason: one short sentence on why this clip works.
@@ -660,8 +659,7 @@ def select_clips(candidates: list[dict], cfg: dict, duration: float) -> list[dic
             continue
         item = dict(cand)
         item["score"] = final_score(cand, cfg)
-        if item["score"] >= c["min_score"]:
-            pool.append(item)
+        pool.append(item)
     pool.sort(key=lambda x: x["score"], reverse=True)
 
     def overlap(a: dict, b: dict) -> float:
@@ -1150,7 +1148,7 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
         tags = " ".join(clip.get("hashtags", []))
         (out_dir / f"{name}.txt").write_text(
             f"{clip['title']}\n\n{clip.get('description', '')}\n\n{tags}\n\n"
-            f"Hodnocení: {clip.get('score', 0):.0f}/100\n"
+            f"Potenciál: {clip.get('score', 0):.0f}/100\n"
             f"Čas ve streamu: {clip['start']:.0f}s - {clip['end']:.0f}s\n"
             f"Hook {clip.get('hook', 0):.0f} | emoce {clip.get('emotion', 0):.0f} | srozumitelnost "
             f"{clip.get('standalone', 0):.0f} | pointa {clip.get('payoff', 0):.0f} | humor "
@@ -1206,8 +1204,7 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
         cand_path.write_text(json.dumps(candidates, ensure_ascii=False, indent=1), encoding="utf-8")
 
     chosen = select_clips(candidates, cfg, duration)
-    rep.log(f"AI navrhla {len(candidates)} momentů, prahem {cfg['clips']['min_score']}/100 "
-            f"prošlo {len(chosen)} klipů.")
+    rep.log(f"AI navrhla {len(candidates)} momentů; po kontrole délky a překryvu zůstalo {len(chosen)} klipů. Skóre žádný moment automaticky nevyřazuje.")
 
     out_dir = DATA_ROOT / cfg["output"]["folder"] / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
