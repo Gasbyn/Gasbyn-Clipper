@@ -645,7 +645,7 @@ def final_score(cand: dict, cfg: dict) -> float:
         return 0.0
     weighted = sum(cand[k] * w for k, w in weights.items())
     quality = weighted / total
-    view_potential = float(cand.get("view_potential", quality) or quality)
+    view_potential = float(cand.get("view_potential", quality))
     return round(clamp(quality * 0.5 + view_potential * 0.5), 1)
 
 
@@ -1239,7 +1239,7 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
     baseline = int(history.get("median_views") or 0)
     for clip in chosen:
         clip["estimated_views"] = (
-            round((baseline * (0.25 + float(clip["score"]) / 100.0 * 2.75)) / 10) * 10
+            round((baseline * (0.25 + float(clip["score"]) / 100.0 * 1.5)) / 10) * 10
             if baseline > 0 else None
         )
     rep.log(f"AI navrhla {len(candidates)} momentů; po kontrole délky a překryvu zůstalo "
@@ -1333,23 +1333,41 @@ def _kick_item(raw: dict, slug: str, kind: str) -> Optional[dict]:
             if isinstance(raw.get("thumbnail"), dict) else (raw.get("thumbnail") or "")}
 
 
-def search_kick(channel: str, kinds: list[str], limit: int = 12) -> list[dict]:
-    """Nejnovější videa a/nebo klipy kanálu na Kicku. kinds: ['videos'] a/nebo ['clips']."""
+def search_kick(channel: str, kinds: list[str], limit: int = 1000) -> list[dict]:
+    """Načte VODy a klipy kanálu; VODy omezuje na 7 dní, klipy stránkuje."""
     slug = channel.strip().strip("/").split("/")[-1].lower()
     if not slug:
         raise ValueError("Zadej jméno kanálu, např. gasbyn.")
     results: list[dict] = []
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Referer": f"https://kick.com/{slug}",
+    }
     for kind in kinds:
-        r = requests.get(KICK_API.format(slug=slug, kind=kind), timeout=15,
-                         headers={"Accept": "application/json"})
-        r.raise_for_status()
-        data = r.json()
-        items = data if isinstance(data, list) else data.get("data", data.get("videos", []))
-        for raw in items or []:
-            item = _kick_item(raw, slug, kind)
-            if item:
-                results.append(item)
-    # VODy jsou omezené na posledních 7 dní; klipy zůstávají dostupné bez časového omezení.
+        cursor = None
+        for _page in range(100 if kind == "clips" else 1):
+            params = {"cursor": cursor} if cursor else None
+            r = requests.get(KICK_API.format(slug=slug, kind=kind), params=params,
+                             timeout=20, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            items = data if isinstance(data, list) else data.get("data", data.get("videos", []))
+            if isinstance(items, dict):
+                items = items.get("clips", items.get("videos", []))
+            for raw in items or []:
+                item = _kick_item(raw, slug, kind)
+                if item:
+                    results.append(item)
+            if kind != "clips" or not isinstance(data, dict):
+                break
+            meta = data.get("pagination") or data.get("meta") or {}
+            next_cursor = (data.get("next_cursor") or data.get("cursor")
+                           or meta.get("next_cursor") or meta.get("nextCursor"))
+            if not next_cursor or str(next_cursor) == str(cursor):
+                break
+            cursor = next_cursor
+
     from datetime import timedelta, timezone
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
     filtered = []
@@ -1366,7 +1384,6 @@ def search_kick(channel: str, kinds: list[str], limit: int = 12) -> list[dict]:
         filtered.append(item)
     filtered.sort(key=lambda x: x["created"], reverse=True)
     return filtered[:limit]
-
 
 def stop_ollama() -> None:
     """Při ukončení Gasbyn Clipperu vypne i Ollamu (server i tray aplikaci)."""
