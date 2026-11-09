@@ -616,7 +616,8 @@ def score_with_ai(segments: list[dict], cfg: dict, rep: Reporter) -> list[dict]:
             candidates.append({
                 "start": round(s, 2),
                 "end": round(e, 2),
-                "view_potential": clamp(float(clip.get("view_potential", 0) or 0)),\n                "hook": clamp(float(clip.get("hook", 0) or 0)),
+                "view_potential": clamp(float(clip.get("view_potential", 50) or 50)),
+                "hook": clamp(float(clip.get("hook", 0) or 0)),
                 "emotion": clamp(float(clip.get("emotion", 0) or 0)),
                 "standalone": clamp(float(clip.get("standalone", 0) or 0)),
                 "payoff": clamp(float(clip.get("payoff", 0) or 0)),
