@@ -487,7 +487,8 @@ def build_prompt(cfg: dict, n: int) -> str:
     context = f"Channel context: {ai['channel_context']}" if ai["channel_context"].strip() else ""
     extra = f"Extra instructions from the creator: {ai['extra_instructions']}" if ai["extra_instructions"].strip() else ""
     meta = META_ON if ai.get("_meta", True) else META_OFF
-    return (PROMPT.replace("{context}", context)
+    youtube_context = ai.get("youtube_context", "")
+    return (PROMPT.replace("{context}", context + ("\\n\\n" + youtube_context if youtube_context else ""))
             .replace("{min}", str(c["min_seconds"]))
             .replace("{max}", str(c["max_seconds"]))
             .replace("{n}", str(n))
@@ -1162,6 +1163,23 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
 
 # ---------------------------------------------------------------- hlavní běh
 
+
+def format_youtube_history(history: dict) -> str:
+    videos = history.get("videos", [])
+    if not videos:
+        return ""
+    top = sorted(videos, key=lambda x: x.get("views_per_day", 0), reverse=True)[:5]
+    low = sorted(videos, key=lambda x: x.get("views_per_day", 0))[:5]
+    lines = ["Creator's own recent YouTube Shorts performance. Learn topic/title patterns; views/day is age-adjusted:"]
+    if top:
+        lines.append("Better-performing examples:")
+        lines.extend(f"- {v.get('title','')}: {v.get('views',0)} views, {v.get('views_per_day',0):.1f} views/day" for v in top)
+    if low:
+        lines.append("Lower-performing examples:")
+        lines.extend(f"- {v.get('title','')}: {v.get('views',0)} views, {v.get('views_per_day',0):.1f} views/day" for v in low)
+    return "\\n".join(lines)
+
+
 def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
             captions_override: Optional[bool] = None,
             loadout: Optional[dict] = None) -> dict:
@@ -1195,6 +1213,17 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
     duration = segments[-1]["end"]
     rep.progress(0.55, "Přepis hotový")
 
+    history = {"videos": [], "median_views": 0, "sample_size": 0}
+    try:
+        import youtube
+        history = youtube.fetch_short_performance(DATA_ROOT, limit=50)
+        cfg["ai"]["youtube_context"] = format_youtube_history(history)
+        if history.get("sample_size"):
+            rep.log(f"YouTube: načteno {history['sample_size']} vlastních krátkých videí; "
+                    f"medián odhadnutý na 7 dní je {history['median_views']} views.")
+    except Exception as exc:
+        rep.log(f"YouTube statistiky nejsou dostupné ({exc}); pokračuji bez personalizace.")
+
     cand_path = job / "candidates.json"
     if cand_path.exists() and not reselect:
         rep.log("Hodnocení AI je v cache, nevolám AI znovu (změna nastavení se projeví hned).")
@@ -1202,16 +1231,6 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
     else:
         candidates = score_with_ai(segments, cfg, rep)
         cand_path.write_text(json.dumps(candidates, ensure_ascii=False, indent=1), encoding="utf-8")
-
-    history = {"videos": [], "median_views": 0, "sample_size": 0}
-    try:
-        import youtube
-        history = youtube.fetch_short_performance(DATA_ROOT, limit=50)
-        if history.get("sample_size"):
-            rep.log(f"YouTube: načteno {history['sample_size']} vlastních krátkých videí; "
-                    f"medián odhadnutý na 7 dní je {history['median_views']} views.")
-    except Exception as exc:
-        rep.log(f"YouTube statistiky nejsou dostupné ({exc}); pokračuji bez personalizace.")
 
     chosen = select_clips(candidates, cfg, duration)
     baseline = int(history.get("median_views") or 0)
