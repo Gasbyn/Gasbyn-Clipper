@@ -454,10 +454,10 @@ def transcribe(video: Path, out_json: Path, cfg: dict, rep: Reporter) -> list[di
 
 # ---------------------------------------------------------------- 3. AI hodnocení
 
-PROMPT = """You are an expert short-form video editor (YouTube Shorts, TikTok, Instagram Reels). You find moments in a long livestream that can go viral.
+PROMPT = """You are an expert short-form video editor (YouTube Shorts, TikTok, Instagram Reels). You estimate which moments are most likely to earn views on this creator channel. A higher score means higher expected views, not merely a technically polished clip.
 {context}
 For each clip candidate, score honestly from 0 to 100 on each criterion:
-- hook: does the first 3 seconds grab attention (surprise, question, bold claim, conflict)?
+- view_potential: expected ability to attract views compared with this creator past Shorts; use supplied channel examples when available. 50 is around typical performance, 80+ is notably stronger, below 30 is weak.\n- hook: does the first 3 seconds grab attention (surprise, question, bold claim, conflict)?
 - emotion: strength of emotion (laughter, shock, anger, excitement, tension).
 - standalone: understandable without knowing the rest of the stream?
 - payoff: does it end on a punchline, resolution or strong moment?
@@ -1177,7 +1177,7 @@ def format_youtube_history(history: dict) -> str:
     if low:
         lines.append("Lower-performing examples:")
         lines.extend(f"- {v.get('title','')}: {v.get('views',0)} views, {v.get('views_per_day',0):.1f} views/day" for v in low)
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
