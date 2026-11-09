@@ -84,8 +84,43 @@ def slugify(text: str, limit: int = 80) -> str:
     return text[:limit] or "video"
 
 
+_CUDA_DLL_HANDLES = []
+
+
+def _prepare_cuda_dll_paths() -> list[Path]:
+    """Make NVIDIA CUDA runtime DLLs from pip wheels visible to CTranslate2."""
+    if sys.platform != "win32":
+        return []
+    roots = []
+    for value in (getattr(sys, "_MEIPASS", None), ROOT,
+                  Path(sys.prefix) / "Lib" / "site-packages",
+                  Path(sys.base_prefix) / "Lib" / "site-packages"):
+        if value:
+            root = Path(value)
+            if root not in roots:
+                roots.append(root)
+    directories = []
+    for root in roots:
+        for relative in (Path("nvidia/cublas/bin"), Path("nvidia/cudnn/bin")):
+            candidate = root / relative
+            if candidate.is_dir() and candidate not in directories:
+                directories.append(candidate)
+    if directories:
+        prefix = os.pathsep.join(str(p) for p in directories)
+        os.environ["PATH"] = prefix + os.pathsep + os.environ.get("PATH", "")
+        add_dll_directory = getattr(os, "add_dll_directory", None)
+        if add_dll_directory:
+            for directory in directories:
+                try:
+                    _CUDA_DLL_HANDLES.append(add_dll_directory(str(directory)))
+                except OSError:
+                    pass
+    return directories
+
+
 def has_cuda() -> bool:
     try:
+        _prepare_cuda_dll_paths()
         import ctranslate2
         return ctranslate2.get_cuda_device_count() > 0
     except Exception:
@@ -366,6 +401,7 @@ def transcribe(video: Path, out_json: Path, cfg: dict, rep: Reporter) -> list[di
         rep.log("Přepis je v cache, přeskakuji přepis.")
         return json.loads(out_json.read_text(encoding="utf-8"))
 
+    _prepare_cuda_dll_paths()
     from faster_whisper import WhisperModel
 
     t = cfg["transcription"]
@@ -400,14 +436,16 @@ def transcribe(video: Path, out_json: Path, cfg: dict, rep: Reporter) -> list[di
 
     try:
         result = run(device, compute)
-    except RuntimeError as exc:
-        # CUDA knihovny (cuBLAS/cuDNN) chybí nebo nejdou načíst - spadneme na procesor.
+    except (RuntimeError, OSError, ImportError) as exc:
         msg = str(exc).lower()
-        if device != "cuda" or not any(k in msg for k in ("cublas", "cudnn", "cuda", ".dll")):
+        cuda_error = any(k in msg for k in (
+            "cublas", "cudnn", "cuda", "dll", "nvcuda", "driver",
+            "no such file", "could not load"
+        ))
+        if device != "cuda" or not cuda_error:
             raise
-        rep.log("GPU nejde použít (chybí CUDA knihovny, např. cublas64_12.dll). "
-                "Přepisuji na procesoru - bude to pomalejší. Pro GPU nainstaluj CUDA 12 runtime "
-                "nebo v Nastavení přepni zařízení na cpu.")
+        rep.log(f"GPU nelze inicializovat ({exc}). Automaticky přecházím na CPU (int8); "
+                "stažené video zůstává zachované.")
         result = run("cpu", "int8")
 
     out_json.parent.mkdir(parents=True, exist_ok=True)
