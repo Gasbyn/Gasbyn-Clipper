@@ -376,25 +376,39 @@ def transcribe(video: Path, out_json: Path, cfg: dict, rep: Reporter) -> list[di
     if compute == "auto":
         compute = "float16" if device == "cuda" else "int8"
 
-    rep.log(f"Přepisuji model {t['model']} na {device} ({compute}) ...")
-    model = WhisperModel(t["model"], device=device, compute_type=compute)
     language = None if t["language"].strip().lower() in ("", "auto") else t["language"].strip()
-    segments, info = model.transcribe(
-        str(video),
-        language=language,
-        vad_filter=bool(t["vad_filter"]),
-        beam_size=int(t["beam_size"]),
-        initial_prompt=t["initial_prompt"] or None,
-    )
-    total = float(info.duration or 1.0)
 
-    result = []
-    for seg in segments:
-        rep.check()
-        result.append({"start": round(seg.start, 2), "end": round(seg.end, 2),
-                       "text": seg.text.strip()})
-        local = min(1.0, seg.end / total)
-        rep.progress(0.25 + 0.30 * local, f"Přepisuji řeč {local * 100:.0f} %")
+    def run(dev: str, comp: str) -> list[dict]:
+        rep.log(f"Přepisuji model {t['model']} na {dev} ({comp}) ...")
+        model = WhisperModel(t["model"], device=dev, compute_type=comp)
+        segments, info = model.transcribe(
+            str(video),
+            language=language,
+            vad_filter=bool(t["vad_filter"]),
+            beam_size=int(t["beam_size"]),
+            initial_prompt=t["initial_prompt"] or None,
+        )
+        total = float(info.duration or 1.0)
+        out: list[dict] = []
+        for seg in segments:
+            rep.check()
+            out.append({"start": round(seg.start, 2), "end": round(seg.end, 2),
+                        "text": seg.text.strip()})
+            local = min(1.0, seg.end / total)
+            rep.progress(0.25 + 0.30 * local, f"Přepisuji řeč {local * 100:.0f} %")
+        return out
+
+    try:
+        result = run(device, compute)
+    except RuntimeError as exc:
+        # CUDA knihovny (cuBLAS/cuDNN) chybí nebo nejdou načíst - spadneme na procesor.
+        msg = str(exc).lower()
+        if device != "cuda" or not any(k in msg for k in ("cublas", "cudnn", "cuda", ".dll")):
+            raise
+        rep.log("GPU nejde použít (chybí CUDA knihovny, např. cublas64_12.dll). "
+                "Přepisuji na procesoru - bude to pomalejší. Pro GPU nainstaluj CUDA 12 runtime "
+                "nebo v Nastavení přepni zařízení na cpu.")
+        result = run("cpu", "int8")
 
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
