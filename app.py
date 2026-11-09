@@ -597,7 +597,7 @@ class App(ctk.CTk):
         ctk.CTkCheckBox(row, text="Klipy a shorty", variable=self.kind_clips, fg_color=ORANGE,
                         hover_color=ORANGE_LIGHT, border_color=BORDER, font=fnt(12),
                         text_color=TEXT).pack(side="left", padx=(14, 0))
-        self.search_btn = ctk.CTkButton(row, text="Hledat", width=100, height=34, corner_radius=9,
+        self.search_btn = ctk.CTkButton(row, text="Načíst kanál", width=110, height=34, corner_radius=9,
                                         fg_color=ORANGE, hover_color=ORANGE_LIGHT,
                                         text_color="white", font=fnt(12, True),
                                         command=self.search_videos)
@@ -614,7 +614,7 @@ class App(ctk.CTk):
             return
         channel = self.channel_var.get()
         self.search_btn.configure(state="disabled")
-        self.search_status.configure(text="Hledám nejnovější…", text_color=MUTED)
+        self.search_status.configure(text="Načítám VODy a klipy kanálu…", text_color=MUTED)
 
         def job() -> None:
             try:
