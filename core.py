@@ -1346,8 +1346,23 @@ def search_kick(channel: str, kinds: list[str], limit: int = 12) -> list[dict]:
             item = _kick_item(raw, slug, kind)
             if item:
                 results.append(item)
-    results.sort(key=lambda x: x["created"], reverse=True)
-    return results[:limit]
+    # VODy jsou omezené na posledních 7 dní; klipy zůstávají dostupné bez časového omezení.
+    from datetime import timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    filtered = []
+    for item in results:
+        if item["kind"] == "videos":
+            try:
+                stamp = datetime.fromisoformat(item["created"].replace("Z", "+00:00"))
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=timezone.utc)
+                if stamp < cutoff:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        filtered.append(item)
+    filtered.sort(key=lambda x: x["created"], reverse=True)
+    return filtered[:limit]
 
 
 def stop_ollama() -> None:
