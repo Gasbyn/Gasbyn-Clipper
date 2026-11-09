@@ -984,6 +984,9 @@ class App(ctk.CTk):
         ctk.CTkLabel(right, text=f"{score:.0f}", font=fnt(30, True), text_color=score_color(score)
                      ).pack(anchor="e")
         ctk.CTkLabel(right, text="/ 100 potenciál views", font=fnt(10), text_color=MUTED).pack(anchor="e")
+        estimate = clip.get("estimated_views")
+        estimate_text = f"~{estimate:,} views" if estimate is not None else "Odhad views: bez dat"
+        ctk.CTkLabel(right, text=estimate_text, font=fnt(11, True), text_color=ORANGE_LIGHT).pack(anchor="e", pady=(3, 0))
 
         btns = ctk.CTkFrame(right, fg_color="transparent")
         btns.pack(anchor="e", pady=(10, 0))
