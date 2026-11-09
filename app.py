@@ -576,7 +576,7 @@ class App(ctk.CTk):
         card.pack(fill="x", pady=(0, 14))
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(fill="x", padx=20, pady=16)
-        ctk.CTkLabel(inner, text="Najít video na platformě", font=fnt(13, True), text_color=TEXT
+        ctk.CTkLabel(inner, text="Knihovna kanálu Kick", font=fnt(13, True), text_color=TEXT
                      ).pack(anchor="w")
         row = ctk.CTkFrame(inner, fg_color="transparent")
         row.pack(fill="x", pady=(10, 0))
@@ -618,7 +618,7 @@ class App(ctk.CTk):
 
         def job() -> None:
             try:
-                items = core.search_kick(channel, kinds, limit=12)
+                items = core.search_kick(channel, kinds, limit=1000)
             except Exception as exc:  # noqa: BLE001
                 self.events.put(("search_error", str(exc)))
                 return
@@ -983,7 +983,7 @@ class App(ctk.CTk):
         score = float(clip.get("score", 0))
         ctk.CTkLabel(right, text=f"{score:.0f}", font=fnt(30, True), text_color=score_color(score)
                      ).pack(anchor="e")
-        ctk.CTkLabel(right, text="/ 100 hodnocení", font=fnt(10), text_color=MUTED).pack(anchor="e")
+        ctk.CTkLabel(right, text="/ 100 potenciál views", font=fnt(10), text_color=MUTED).pack(anchor="e")
 
         btns = ctk.CTkFrame(right, fg_color="transparent")
         btns.pack(anchor="e", pady=(10, 0))
