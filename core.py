@@ -1374,13 +1374,20 @@ def pull_ollama_model(cfg: dict, rep: Reporter) -> None:
 
 def prefetch_whisper(cfg: dict, rep: Reporter) -> None:
     """Stáhne model Whisper předem, aby první přepis nečekal na stahování."""
+    _prepare_cuda_dll_paths()
     from faster_whisper import WhisperModel
     t = cfg["transcription"]
     device = "cuda" if has_cuda() else "cpu"
     compute = "float16" if device == "cuda" else "int8"
     rep.log(f"Stahuji přepisovací model Whisper {t['model']} (jednorázově, několik GB) ...")
     rep.progress(0.5, f"Whisper {t['model']}")
-    WhisperModel(t["model"], device=device, compute_type=compute)
+    try:
+        WhisperModel(t["model"], device=device, compute_type=compute)
+    except (RuntimeError, OSError, ImportError) as exc:
+        if device != "cuda":
+            raise
+        rep.log(f"GPU runtime není dostupný ({exc}); model připravuji na CPU (int8).")
+        WhisperModel(t["model"], device="cpu", compute_type="int8")
     rep.log("Přepisovací model je připravený.")
 
 
