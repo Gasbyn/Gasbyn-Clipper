@@ -474,7 +474,7 @@ Rules:
 {extra}
 {learn}
 Respond ONLY with JSON in this exact shape:
-{{"clips": [{{"start": 0.0, "end": 0.0, "hook": 0, "emotion": 0, "standalone": 0, "payoff": 0, "humor": 0, "title": "", "description": "", "hashtags": [], "reason": ""}}]}}"""
+{{"clips": [{{"start": 0.0, "end": 0.0, "view_potential": 0, "hook": 0, "emotion": 0, "standalone": 0, "payoff": 0, "humor": 0, "title": "", "description": "", "hashtags": [], "reason": ""}}]}}"""
 
 META_ON = ("- description: one or two sentences.\n"
            "- hashtags: 3 to 5 hashtags without spaces.")
@@ -488,7 +488,7 @@ def build_prompt(cfg: dict, n: int) -> str:
     extra = f"Extra instructions from the creator: {ai['extra_instructions']}" if ai["extra_instructions"].strip() else ""
     meta = META_ON if ai.get("_meta", True) else META_OFF
     youtube_context = ai.get("youtube_context", "")
-    return (PROMPT.replace("{context}", context + ("\\n\\n" + youtube_context if youtube_context else ""))
+    return (PROMPT.replace("{context}", context + ("\n\n" + youtube_context if youtube_context else ""))
             .replace("{min}", str(c["min_seconds"]))
             .replace("{max}", str(c["max_seconds"]))
             .replace("{n}", str(n))
@@ -616,7 +616,7 @@ def score_with_ai(segments: list[dict], cfg: dict, rep: Reporter) -> list[dict]:
             candidates.append({
                 "start": round(s, 2),
                 "end": round(e, 2),
-                "hook": clamp(float(clip.get("hook", 0) or 0)),
+                "view_potential": clamp(float(clip.get("view_potential", 0) or 0)),\n                "hook": clamp(float(clip.get("hook", 0) or 0)),
                 "emotion": clamp(float(clip.get("emotion", 0) or 0)),
                 "standalone": clamp(float(clip.get("standalone", 0) or 0)),
                 "payoff": clamp(float(clip.get("payoff", 0) or 0)),
@@ -643,7 +643,9 @@ def final_score(cand: dict, cfg: dict) -> float:
     if total <= 0:
         return 0.0
     weighted = sum(cand[k] * w for k, w in weights.items())
-    return round(clamp(weighted / total), 1)
+    quality = weighted / total
+    view_potential = float(cand.get("view_potential", quality) or quality)
+    return round(clamp(quality * 0.5 + view_potential * 0.5), 1)
 
 
 def select_clips(candidates: list[dict], cfg: dict, duration: float) -> list[dict]:
