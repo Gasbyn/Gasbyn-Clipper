@@ -1203,8 +1203,25 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
         candidates = score_with_ai(segments, cfg, rep)
         cand_path.write_text(json.dumps(candidates, ensure_ascii=False, indent=1), encoding="utf-8")
 
+    history = {"videos": [], "median_views": 0, "sample_size": 0}
+    try:
+        import youtube
+        history = youtube.fetch_short_performance(DATA_ROOT, limit=50)
+        if history.get("sample_size"):
+            rep.log(f"YouTube: načteno {history['sample_size']} vlastních krátkých videí; "
+                    f"medián odhadnutý na 7 dní je {history['median_views']} views.")
+    except Exception as exc:
+        rep.log(f"YouTube statistiky nejsou dostupné ({exc}); pokračuji bez personalizace.")
+
     chosen = select_clips(candidates, cfg, duration)
-    rep.log(f"AI navrhla {len(candidates)} momentů; po kontrole délky a překryvu zůstalo {len(chosen)} klipů. Skóre žádný moment automaticky nevyřazuje.")
+    baseline = int(history.get("median_views") or 0)
+    for clip in chosen:
+        clip["estimated_views"] = (
+            round((baseline * (0.25 + float(clip["score"]) / 100.0 * 2.75)) / 10) * 10
+            if baseline > 0 else None
+        )
+    rep.log(f"AI navrhla {len(candidates)} momentů; po kontrole délky a překryvu zůstalo "
+            f"{len(chosen)} klipů. Skóre žádný moment automaticky nevyřazuje.")
 
     out_dir = DATA_ROOT / cfg["output"]["folder"] / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
