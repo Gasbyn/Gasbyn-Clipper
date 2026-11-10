@@ -1166,21 +1166,54 @@ def write_ass(path: Path, items: list[tuple[float, float, str]], cap: dict, sub:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
 
 
+def _ffmpeg_error(proc: subprocess.CompletedProcess) -> str:
+    text = (proc.stderr or "").strip()
+    if len(text) <= 2400:
+        return text or f"FFmpeg skončil s kódem {proc.returncode} bez podrobností."
+    return text[:1200] + "\\n...\\n" + text[-1200:]
+
+
+def _encoder_args(encoder: str, spec: dict) -> list[str]:
+    if encoder == "h264_nvenc":
+        return ["-c:v", encoder, "-preset", "p4", "-tune", "hq",
+                "-rc", "vbr", "-cq", str(max(18, min(28, int(spec["crf"])))),
+                "-b:v", "0", "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-preset", str(spec["preset"]),
+            "-crf", str(int(spec["crf"])), "-pix_fmt", "yuv420p"]
+
+
+def _available_encoders() -> set[str]:
+    try:
+        proc = subprocess.run([ffmpeg_bin(), "-hide_banner", "-encoders"],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=20)
+        data = proc.stdout + proc.stderr
+        return {name for name in ("libx264", "h264_nvenc") if name in data}
+    except (OSError, subprocess.SubprocessError):
+        return {"libx264"}
+
+
+def _plain_video_filter(fmt: str, src_w: int, src_h: int, W: int, H: int) -> str:
+    if fmt == "short":
+        ratio = W / H
+        if src_w / src_h > ratio:
+            cw = _even(src_h * ratio)
+            return f"crop={cw}:{_even(src_h)}:{max(0, (src_w-cw)//2)}:0,scale={W}:{H},setsar=1"
+        ch = _even(src_w / ratio)
+        return f"crop={_even(src_w)}:{ch}:0:{max(0, (src_h-ch)//2)},scale={W}:{H},setsar=1"
+    return f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+
+
 def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
                 cfg: dict, index: int, rep: Reporter,
                 items_override: Optional[list] = None,
                 name_override: Optional[str] = None) -> Path:
-    """Vystřihne klip podle loadoutu (short-form) nebo celého rámce (long-form).
-
-    clip['output_spec'] a clip['src_size'] drží parametry z doby běhu, takže přerenderování
-    v editoru dá stejný výsledek i bez znovu zjištěných údajů o VODu.
-    """
+    """Plný export s loadoutem; při chybě zkusí NVENC a pak skutečný jednoduchý crop/scale."""
     o, cap = cfg["output"], cfg["captions"]
     spec = clip.get("output_spec") or {"width": int(o["width"]), "height": int(o["height"]),
                                        "fps": int(o["fps"]), "crf": int(o["crf"]),
                                        "preset": o["preset"], "audio_bitrate": o["audio_bitrate"]}
     W, H = int(spec["width"]), int(spec["height"])
-
     if name_override:
         name = name_override
     else:
@@ -1190,68 +1223,79 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
         except (KeyError, IndexError, ValueError):
             name = f"klip_{index:02d}"
         name = slugify(name, 120)
-
     duration = float(clip["end"]) - float(clip["start"])
+    if duration <= 0:
+        raise RuntimeError(f"Neplatná délka klipu: {duration:.2f}s")
     src_w, src_h = clip.get("src_size") or [1920, 1080]
     fmt = clip.get("format") or cfg["clips"]["format"]
-    if fmt == "short" and clip.get("loadout"):
-        lo = clean_loadout(clip["loadout"])
-    else:
-        lo = default_loadout(fmt, src_w, src_h, clip.get("effects"))
+    lo = (clean_loadout(clip["loadout"]) if fmt == "short" and clip.get("loadout")
+          else default_loadout(fmt, src_w, src_h, clip.get("effects")))
     photos = [p for p in lo["photos"] if Path(p["path"]).exists()]
     for p in lo["photos"]:
         if p not in photos:
             rep.log(f"Fotka {Path(p['path']).name} nebyla nalezena, přeskakuji ji.")
-
     subs = None
     if cap["enabled"]:
-        if items_override is not None:
-            items = items_override
-        else:
-            items = caption_items(segments, clip["start"], clip["end"],
-                                  int(cap["words_per_caption"]), bool(cap["uppercase"]))
-        write_srt(out_dir / f"{name}.srt", items)  # pro editor
-        sub = clean_subtitles(clip.get("subtitles") or lo.get("subtitles"))
-        ass_name = f"{name}.ass"
-        write_ass(out_dir / ass_name, items, cap, sub, W, H)
-        subs = ass_name
-
+        items = items_override if items_override is not None else caption_items(
+            segments, clip["start"], clip["end"], int(cap["words_per_caption"]), bool(cap["uppercase"]))
+        write_srt(out_dir / f"{name}.srt", items)
+        write_ass(out_dir / f"{name}.ass", items, cap,
+                  clean_subtitles(clip.get("subtitles") or lo.get("subtitles")), W, H)
+        subs = f"{name}.ass"
     graph = loadout_graph(lo, W, H, int(src_w), int(src_h), duration, photos, subs)
-
     out_file = out_dir / f"{name}.mp4"
-    cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error",
-           "-ss", f"{clip['start']:.3f}", "-i", str(video)]
-    for p in photos:
-        cmd += ["-loop", "1", "-i", str(p["path"])]
-    cmd += ["-t", f"{duration:.3f}", "-filter_complex", graph,
-            "-map", "[vout]", "-map", "0:a?",
-            "-r", str(int(spec["fps"])),
-            "-c:v", "libx264", "-preset", str(spec["preset"]), "-crf", str(int(spec["crf"])),
-            "-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart"]
-    fade_views = [v for v in lo["views"] if v.get("anim") == "fade"]
-    if fade_views:
-        d = max(0.1, float(fade_views[0].get("anim_seconds", 0.6)))
-        cmd += ["-af", f"afade=t=in:st=0:d={d}"]
-    cmd.append(out_file.name)
-
-    rep.check()
-    proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace")
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg selhal u klipu {index}: {proc.stderr.strip()[-400:]}")
-
+    start = f"{float(clip['start']):.3f}"
+    encoders = [e for e in ("libx264", "h264_nvenc") if e in _available_encoders()] or ["libx264"]
+    errors = []
+    success = False
+    for encoder in encoders:
+        cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", start, "-i", str(video)]
+        for p in photos:
+            cmd += ["-loop", "1", "-i", str(p["path"])]
+        cmd += ["-t", f"{duration:.3f}", "-filter_complex", graph, "-map", "[vout]", "-map", "0:a?",
+                "-r", str(int(spec["fps"])), "-fps_mode", "cfr"]
+        cmd += _encoder_args(encoder, spec)
+        cmd += ["-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart", out_file.name]
+        rep.check()
+        out_file.unlink(missing_ok=True)
+        rep.log(f"Exportuji plný klip ({encoder})…")
+        proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace")
+        if proc.returncode == 0 and out_file.exists() and out_file.stat().st_size > 1024:
+            success = True
+            break
+        out_file.unlink(missing_ok=True)
+        errors.append(f"{encoder}: {_ffmpeg_error(proc)}")
+    if not success:
+        rep.log("Plný export selhal. Zkouším nouzový střih bez loadoutu, titulků a efektů.")
+        for encoder in encoders:
+            cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", start,
+                   "-i", str(video), "-t", f"{duration:.3f}", "-vf",
+                   _plain_video_filter(fmt, int(src_w), int(src_h), W, H),
+                   "-map", "0:v:0", "-map", "0:a?", "-r", str(int(spec["fps"])), "-fps_mode", "cfr"]
+            cmd += _encoder_args(encoder, spec)
+            cmd += ["-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart", out_file.name]
+            rep.check()
+            out_file.unlink(missing_ok=True)
+            rep.log(f"Nouzový crop/scale ({encoder})…")
+            proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace")
+            if proc.returncode == 0 and out_file.exists() and out_file.stat().st_size > 1024:
+                success = True
+                rep.log("Klip zachráněn nouzovým exportem (bez loadoutu/titulků).")
+                break
+            out_file.unlink(missing_ok=True)
+            errors.append(f"simple {encoder}: {_ffmpeg_error(proc)}")
+    if not success:
+        raise RuntimeError(f"FFmpeg selhal u klipu {index}. " + " | ".join(errors)[-3000:])
     if o["write_txt"]:
         tags = " ".join(clip.get("hashtags", []))
         (out_dir / f"{name}.txt").write_text(
-            f"{clip['title']}\n\n{clip.get('description', '')}\n\n{tags}\n\n"
-            f"Potenciál: {clip.get('score', 0):.0f}/100\n"
-            f"Čas ve streamu: {clip['start']:.0f}s - {clip['end']:.0f}s\n"
-            f"Hook {clip.get('hook', 0):.0f} | emoce {clip.get('emotion', 0):.0f} | srozumitelnost "
-            f"{clip.get('standalone', 0):.0f} | pointa {clip.get('payoff', 0):.0f} | humor "
-            f"{clip.get('humor', 0):.0f} | tempo {clip.get('pacing', 0):.0f}\n"
-            f"Proč: {clip.get('reason', '')}\n",
-            encoding="utf-8",
-        )
+            f"{clip['title']}\\n\\n{clip.get('description', '')}\\n\\n{tags}\\n\\n"
+            f"Potenciál: {clip.get('score', 0):.0f}/100\\n"
+            f"Odhad views: {clip.get('estimated_views') or 'nedostatek dat'}\\n"
+            f"Čas ve streamu: {clip['start']:.0f}s - {clip['end']:.0f}s\\n"
+            f"Proč: {clip.get('reason', '')}\\n", encoding="utf-8")
     clip["file"] = out_file.name
     return out_file
 
