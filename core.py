@@ -566,16 +566,42 @@ def _openrouter_key(cfg: dict) -> str:
 
 
 def ask_llm(cfg: dict, system: str, user: str, rep: Reporter) -> str:
+    """Volá AI s omezeným retry; chyby modelu/HTTP 500 se neopakují naslepo."""
+    retries = max(0, min(2, int(cfg["ai"].get("max_retries", 1))))
     last: Exception | None = None
-    for attempt in range(int(cfg["ai"]["max_retries"]) + 1):
+    for attempt in range(retries + 1):
         rep.check()
         try:
             return _call_llm(cfg, system, user)
-        except (requests.RequestException, KeyError, ValueError, RuntimeError) as exc:
+        except requests.HTTPError as exc:
             last = exc
-            rep.log(f"AI nereagovala ({exc}), zkouším znovu ...")
-            time.sleep(3)
-    raise RuntimeError(f"AI je nedostupná: {last}")
+            status = exc.response.status_code if exc.response is not None else None
+            body = ""
+            if exc.response is not None:
+                body = (exc.response.text or "").strip().replace("\\n", " ")
+            detail = f"HTTP {status}" if status else str(exc)
+            if body:
+                detail += f": {body[:700]}"
+            # 500 obvykle znamená chybu inference/OOM/modelu; opakování stejného
+            # požadavku bez změny promptu jen zdržuje. Retry jen pro přechodné stavy.
+            retryable = status in (408, 425, 429, 502, 503, 504)
+            if not retryable or attempt >= retries:
+                raise RuntimeError(f"AI požadavek selhal ({detail}).") from exc
+            delay = min(8.0, 1.5 * (2 ** attempt))
+            rep.log(f"AI server dočasně neodpovídá ({detail}); další pokus za {delay:.1f} s.")
+            time.sleep(delay)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            last = exc
+            if attempt >= retries:
+                break
+            delay = min(8.0, 1.5 * (2 ** attempt))
+            rep.log(f"AI spojení selhalo ({exc}); další pokus za {delay:.1f} s.")
+            time.sleep(delay)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise RuntimeError(f"AI požadavek nelze dokončit: {exc}") from exc
+        except requests.RequestException as exc:
+            raise RuntimeError(f"AI síťová chyba bez automatického opakování: {exc}") from exc
+    raise RuntimeError(f"AI je nedostupná po {retries + 1} pokusech: {last}")
 
 
 def parse_clips(text: str) -> list[dict]:
@@ -1105,13 +1131,13 @@ def loadout_graph(lo: dict, W: int, H: int, src_w: int, src_h: int, duration: fl
         bx, by, bw, bh = v["place"]
         pw, ph = _even(bw * W), _even(bh * H)
         px, py = int(round(bx * W)), int(round(by * H))
-        parts.append(f"[0:v]crop={cw_px}:{ch_px}:{x_px}:{y_px},"
+        parts.append(f"[0:v]setpts=PTS-STARTPTS,crop={cw_px}:{ch_px}:{x_px}:{y_px},"
                      f"scale={pw}:{ph}:force_original_aspect_ratio=increase,crop={pw}:{ph},"
                      f"setsar=1,format=yuva420p[v{i}raw]")
         parts.append(_anim_chain(f"v{i}raw", f"v{i}", v.get("anim", "none"),
                                  v.get("anim_seconds", 0.6), pw, ph, f"tv{i}"))
         nxt = f"o{i}"
-        parts.append(f"[{cur}][v{i}]overlay={px}:{py}[{nxt}]")
+        parts.append(f"[{cur}][v{i}]overlay={px}:{py}:eof_action=pass:shortest=1[{nxt}]")
         cur = nxt
     for j, p in enumerate(photos):
         bx, by, bw, bh = p["place"]
@@ -1125,7 +1151,7 @@ def loadout_graph(lo: dict, W: int, H: int, src_w: int, src_h: int, duration: fl
                                  p.get("anim_seconds", 0.6), pw, ph, f"tp{j}"))
         nxt = f"q{j}"
         parts.append(f"[{cur}][p{j}]overlay=x='{px}+({pw}-w)/2':y='{py}+({ph}-h)/2'"
-                     f":enable='between(t,{start:.2f},{end:.2f})'[{nxt}]")
+                     f":enable='between(t,{start:.2f},{end:.2f})':eof_action=pass:shortest=1[{nxt}]")
         cur = nxt
     if subs:
         parts.append(f"[{cur}]subtitles={subs},format=yuv420p[vout]")
@@ -1255,7 +1281,7 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
         cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", start, "-i", str(video)]
         for p in photos:
             cmd += ["-loop", "1", "-i", str(p["path"])]
-        cmd += ["-t", f"{duration:.3f}", "-filter_complex", graph, "-map", "[vout]", "-map", "0:a?",
+        cmd += ["-t", f"{duration:.3f}", "-filter_complex_threads", "1", "-filter_complex", graph, "-map", "[vout]", "-map", "0:a?",
                 "-r", str(int(spec["fps"])), "-fps_mode", "cfr"]
         cmd += _encoder_args(encoder, spec)
         cmd += ["-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart", out_file.name]
@@ -1333,7 +1359,9 @@ def refine_candidates_with_ai(segments: list[dict], candidates: list[dict],
     if not candidates:
         return []
     duration = float(segments[-1]["end"])
-    ranked = sorted(candidates, key=lambda x: final_score(x, cfg), reverse=True)[:24]
+    # Druhé kolo je dražší než první. Prověřujeme jen nejlepší kandidáty
+    # a kratší kontext, aby lokální modely zbytečně nepadaly na nedostatek VRAM.
+    ranked = sorted(candidates, key=lambda x: final_score(x, cfg), reverse=True)[:12]
     rows = []
     for idx, clip in enumerate(ranked):
         a = max(0.0, float(clip["start"]) - 15.0)
@@ -1341,7 +1369,7 @@ def refine_candidates_with_ai(segments: list[dict], candidates: list[dict],
         excerpt = " ".join(s["text"] for s in segments if s["end"] > a and s["start"] < b)
         rows.append({"id": idx, "start": clip["start"], "end": clip["end"],
                      "title": clip.get("title", ""), "reason": clip.get("reason", ""),
-                     "transcript_context": excerpt[:2400]})
+                     "transcript_context": excerpt[:1200]})
     system = """You are a senior short-form video editor. Compare candidate moments.
 Prefer a clear hook, understandable context, strong payoff, emotion, humor or surprising gameplay.
 Reject only genuinely incoherent moments, mostly silence, or moments with no meaningful payoff.
@@ -1366,8 +1394,12 @@ Return ONLY JSON with this shape:
     user = "Compare these candidates using the creator context above:\n" + json.dumps(
         rows, ensure_ascii=False)
     rep.log(f"Druhé AI kolo: porovnávám {len(rows)} kandidátů a upravuji pořadí/metadata…")
+    review_cfg = cfg
+    if cfg["ai"].get("provider") == "ollama":
+        review_cfg = copy.deepcopy(cfg)
+        review_cfg["ai"]["ollama_num_ctx"] = min(8192, int(cfg["ai"].get("ollama_num_ctx", 8192)))
     try:
-        raw = ask_llm(cfg, system, user, rep)
+        raw = ask_llm(review_cfg, system, user, rep)
         left, right = raw.find("{"), raw.rfind("}")
         if left < 0 or right <= left:
             raise ValueError("AI nevrátila JSON")
