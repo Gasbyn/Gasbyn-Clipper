@@ -1350,7 +1350,19 @@ Return ONLY JSON with this shape:
 {"reviews":[{"id":0,"keep":true,"view_potential":0,"hook":0,"emotion":0,
 "standalone":0,"payoff":0,"humor":0,"title":"","description":"",
 "hashtags":["#tag"],"reason":""}]}"""
-    user = "Compare these candidates using the creator history in the system context:\n" + json.dumps(
+    context_parts = []
+    if cfg["ai"].get("channel_context"):
+        context_parts.append("Channel context: " + cfg["ai"]["channel_context"])
+    if cfg["ai"].get("youtube_context"):
+        context_parts.append(cfg["ai"]["youtube_context"])
+    learned = learning_block(cfg)
+    if learned:
+        context_parts.append(learned)
+    if category_line(cfg):
+        context_parts.append(category_line(cfg))
+    if context_parts:
+        system += "\n\nCreator context:\n" + "\n".join(context_parts)
+    user = "Compare these candidates using the creator context above:\n" + json.dumps(
         rows, ensure_ascii=False)
     rep.log(f"Druhé AI kolo: porovnávám {len(rows)} kandidátů a upravuji pořadí/metadata…")
     try:
