@@ -254,8 +254,8 @@ def cache_report(cfg: dict) -> dict:
     return {
         "downloads": _size(downloads),
         "transcripts": sum(_size(j / "transcript.json") for j in jobs.iterdir()) if jobs.exists() else 0,
-        "selections": sum(_size(j / "candidates.json") + _size(j / "clips.json")
-                          for j in jobs.iterdir()) if jobs.exists() else 0,
+        "selections": sum(_size(j / "candidates.json") + _size(j / "candidates_meta.json")
+                          + _size(j / "clips.json") for j in jobs.iterdir()) if jobs.exists() else 0,
         "learning": _size(learning_path(cfg)),
         "total": _size(root),
     }
@@ -285,6 +285,7 @@ def clean_cache(cfg: dict, what: str, rep: Reporter) -> int:
                 remove(job / "transcript.json")
             if what in ("selections", "all"):
                 remove(job / "candidates.json")
+                remove(job / "candidates_meta.json")
                 remove(job / "clips.json")
             if what == "all":
                 remove(job)
@@ -1502,16 +1503,9 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
         try:
             render_clip(video, segments, clip, out_dir, cfg, i, rep)
         except RuntimeError as exc:
-            rep.log(f"Klip {i} se nepovedl ({str(exc)[:160]}). Zkouším jednoduchý střih bez loadoutu a titulků.")
-            plain = copy.deepcopy(cfg)
-            plain["captions"]["enabled"] = False
-            clip["loadout"] = None
-            clip.pop("file", None)
-            try:
-                render_clip(video, segments, clip, out_dir, plain, i, rep)
-            except RuntimeError as exc2:
-                rep.log(f"Klip {i} se nepodařilo vystříhnout, přeskakuji ho ({str(exc2)[:160]}).")
-                clip["failed"] = True
+            rep.log(f"Klip {i} se nepodařilo exportovat ani po všech záložních postupech: {str(exc)[:900]}")
+            clip["failed"] = True
+
     chosen = [c for c in chosen if not c.get("failed")]
 
     manifest = {"video_id": video_id, "created": datetime.now().isoformat(timespec="seconds"),
