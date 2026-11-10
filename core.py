@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -457,7 +458,8 @@ def transcribe(video: Path, out_json: Path, cfg: dict, rep: Reporter) -> list[di
 PROMPT = """You are an expert short-form video editor (YouTube Shorts, TikTok, Instagram Reels). You estimate which moments are most likely to earn views on this creator channel. A higher score means higher expected views, not merely a technically polished clip.
 {context}
 For each clip candidate, score honestly from 0 to 100 on each criterion:
-- view_potential: expected ability to attract views compared with this creator past Shorts; use supplied channel examples when available. 50 is around typical performance, 80+ is notably stronger, below 30 is weak.\n- hook: does the first 3 seconds grab attention (surprise, question, bold claim, conflict)?
+- view_potential: expected ability to attract views compared with this creator past Shorts; use supplied channel examples when available. 50 is around typical performance, 80+ is notably stronger, below 30 is weak.
+- hook: does the first 3 seconds grab attention (surprise, question, bold claim, conflict)?
 - emotion: strength of emotion (laughter, shock, anger, excitement, tension).
 - standalone: understandable without knowing the rest of the stream?
 - payoff: does it end on a punchline, resolution or strong moment?
@@ -623,7 +625,7 @@ def pacing_score(segments: list[dict], start: float, end: float) -> float:
 def score_with_ai(segments: list[dict], cfg: dict, rep: Reporter) -> list[dict]:
     chunk_min = int(cfg["ai"]["chunk_minutes"])
     chunks = build_chunks(segments, chunk_min * 60)
-    per_chunk = max(1, round(float(cfg["clips"]["count_per_hour"]) * chunk_min / 60) + 1)
+    per_chunk = min(8, max(4, round(float(cfg["clips"]["count_per_hour"]) * chunk_min / 60) + 2))
     system = build_prompt(cfg, per_chunk)
     candidates: list[dict] = []
 
@@ -645,7 +647,7 @@ def score_with_ai(segments: list[dict], cfg: dict, rep: Reporter) -> list[dict]:
             candidates.append({
                 "start": round(s, 2),
                 "end": round(e, 2),
-                "view_potential": clamp(float(clip.get("view_potential", 50) or 50)),
+                "view_potential": clamp(float(50 if clip.get("view_potential") is None else clip["view_potential"])),
                 "hook": clamp(float(clip.get("hook", 0) or 0)),
                 "emotion": clamp(float(clip.get("emotion", 0) or 0)),
                 "standalone": clamp(float(clip.get("standalone", 0) or 0)),
@@ -1303,6 +1305,85 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
 # ---------------------------------------------------------------- hlavní běh
 
 
+
+ANALYSIS_CACHE_VERSION = 3
+
+
+def analysis_fingerprint(cfg: dict, history: dict) -> str:
+    ai = cfg["ai"]
+    payload = {
+        "version": ANALYSIS_CACHE_VERSION,
+        "provider": ai.get("provider"),
+        "model": ai.get("ollama_model") if ai.get("provider") == "ollama" else ai.get("openrouter_model"),
+        "speed": ai.get("speed_mode"), "chunk_minutes": ai.get("chunk_minutes"),
+        "category": cfg["clips"].get("category"), "format": cfg["clips"].get("format"),
+        "count_per_hour": cfg["clips"].get("count_per_hour"),
+        "channel_context": ai.get("channel_context"), "extra": ai.get("extra_instructions"),
+        "youtube_examples": [(v.get("title"), v.get("views"), round(v.get("views_per_day", 0), 1))
+                             for v in history.get("videos", [])[:50]],
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def refine_candidates_with_ai(segments: list[dict], candidates: list[dict],
+                              cfg: dict, rep: Reporter) -> list[dict]:
+    """Druhé AI kolo: porovná kandidáty v kontextu a zpřesní skóre i metadata."""
+    if not candidates:
+        return []
+    duration = float(segments[-1]["end"])
+    ranked = sorted(candidates, key=lambda x: final_score(x, cfg), reverse=True)[:24]
+    rows = []
+    for idx, clip in enumerate(ranked):
+        a = max(0.0, float(clip["start"]) - 15.0)
+        b = min(duration, float(clip["end"]) + 15.0)
+        excerpt = " ".join(s["text"] for s in segments if s["end"] > a and s["start"] < b)
+        rows.append({"id": idx, "start": clip["start"], "end": clip["end"],
+                     "title": clip.get("title", ""), "reason": clip.get("reason", ""),
+                     "transcript_context": excerpt[:2400]})
+    system = """You are a senior short-form video editor. Compare candidate moments.
+Prefer a clear hook, understandable context, strong payoff, emotion, humor or surprising gameplay.
+Reject only genuinely incoherent moments, mostly silence, or moments with no meaningful payoff.
+Do not reward generic chatter. Scores are 0-100: 50 is average for this creator, 80+ exceptional,
+below 25 weak. Do not change timestamps. Improve titles and metadata in the transcript language.
+Return ONLY JSON with this shape:
+{"reviews":[{"id":0,"keep":true,"view_potential":0,"hook":0,"emotion":0,
+"standalone":0,"payoff":0,"humor":0,"title":"","description":"",
+"hashtags":["#tag"],"reason":""}]}"""
+    user = "Compare these candidates using the creator history in the system context:\n" + json.dumps(
+        rows, ensure_ascii=False)
+    rep.log(f"Druhé AI kolo: porovnávám {len(rows)} kandidátů a upravuji pořadí/metadata…")
+    try:
+        raw = ask_llm(cfg, system, user, rep)
+        left, right = raw.find("{"), raw.rfind("}")
+        if left < 0 or right <= left:
+            raise ValueError("AI nevrátila JSON")
+        reviews = json.loads(raw[left:right + 1]).get("reviews", [])
+        by_id = {int(x["id"]): x for x in reviews if isinstance(x, dict) and "id" in x}
+        refined = []
+        for idx, original in enumerate(ranked):
+            review = by_id.get(idx)
+            if not review:
+                refined.append(original)
+                continue
+            if review.get("keep") is False:
+                continue
+            item = dict(original)
+            for key in ("view_potential", "hook", "emotion", "standalone", "payoff", "humor"):
+                if review.get(key) is not None:
+                    item[key] = clamp(float(review[key]))
+            for key in ("title", "description", "reason"):
+                if str(review.get(key, "")).strip():
+                    item[key] = str(review[key]).strip()
+            if isinstance(review.get("hashtags"), list):
+                item["hashtags"] = [str(x) for x in review["hashtags"] if str(x).strip()][:8]
+            refined.append(item)
+        return refined or candidates
+    except Exception as exc:
+        rep.log(f"Druhé AI kolo se nepovedlo ({exc}); ponechávám první hodnocení.")
+        return candidates
+
+
 def format_youtube_history(history: dict) -> str:
     videos = history.get("videos", [])
     if not videos:
@@ -1364,12 +1445,25 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
         rep.log(f"YouTube statistiky nejsou dostupné ({exc}); pokračuji bez personalizace.")
 
     cand_path = job / "candidates.json"
-    if cand_path.exists() and not reselect:
-        rep.log("Hodnocení AI je v cache, nevolám AI znovu (změna nastavení se projeví hned).")
+    meta_path = job / "candidates_meta.json"
+    fingerprint = analysis_fingerprint(cfg, history)
+    cache_valid = False
+    if cand_path.exists() and meta_path.exists() and not reselect:
+        try:
+            cache_valid = json.loads(meta_path.read_text(encoding="utf-8")).get("fingerprint") == fingerprint
+        except (OSError, json.JSONDecodeError, AttributeError):
+            cache_valid = False
+    if cache_valid:
+        rep.log("Analýza AI je v platné cache (stejný model, nastavení i YouTube kontext).")
         candidates = json.loads(cand_path.read_text(encoding="utf-8"))
     else:
+        if cand_path.exists():
+            rep.log("Cache analýzy je zastaralá nebo se změnilo nastavení; spouštím novou analýzu.")
         candidates = score_with_ai(segments, cfg, rep)
+        candidates = refine_candidates_with_ai(segments, candidates, cfg, rep)
         cand_path.write_text(json.dumps(candidates, ensure_ascii=False, indent=1), encoding="utf-8")
+        meta_path.write_text(json.dumps({"version": ANALYSIS_CACHE_VERSION,
+                                         "fingerprint": fingerprint}, indent=1), encoding="utf-8")
 
     chosen = select_clips(candidates, cfg, duration, segments)
     baseline = int(history.get("median_views") or 0)
