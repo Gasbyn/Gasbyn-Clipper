@@ -587,12 +587,17 @@ def parse_clips(text: str) -> list[dict]:
     return clips if isinstance(clips, list) else []
 
 
-def build_chunks(segments: list[dict], chunk_seconds: float) -> list[list[dict]]:
+def build_chunks(segments: list[dict], chunk_seconds: float,
+                 overlap_seconds: float = 90) -> list[list[dict]]:
+    """Části přepisu. Každá další začíná o overlap_seconds dřív, takže moment na hranici
+    části AI uvidí celý. Duplicity pak řeší výběr klipů."""
     chunks, current, chunk_start = [], [], 0.0
     for seg in segments:
         if current and seg["start"] - chunk_start >= chunk_seconds:
             chunks.append(current)
-            current, chunk_start = [], seg["start"]
+            keep_from = seg["start"] - overlap_seconds
+            current = [s for s in current if s["end"] > keep_from]
+            chunk_start = seg["start"]
         current.append(seg)
     if current:
         chunks.append(current)
@@ -673,15 +678,36 @@ def final_score(cand: dict, cfg: dict) -> float:
     return round(clamp(quality * 0.5 + view_potential * 0.5), 1)
 
 
-def select_clips(candidates: list[dict], cfg: dict, duration: float) -> list[dict]:
-    """Přepočítá skóre, zahodí podle délky a prahu, vybere nejlepší bez velkého překryvu."""
+def refine_bounds(segments: list[dict], start: float, end: float, max_len: float,
+                  duration: float) -> tuple[float, float]:
+    """Přichytí začátek na začátek promluvy (ořízne ticho i půl slova) a konec na konec
+    věty, pak přidá krátký dozvuk, aby pointa nezapadla. Hlídá maximální délku."""
+    starts = [s["start"] for s in segments if start - 1.5 <= s["start"] <= start + 1.0]
+    if starts:
+        start = min(starts, key=lambda t: abs(t - start))
+    ends = [s["end"] for s in segments if end - 1.5 <= s["end"] <= end + 1.5]
+    if ends:
+        end = min(ends, key=lambda t: abs(t - end))
+    end = min(end + 0.4, duration)
+    if end - start > max_len:
+        end = start + max_len
+    return round(max(0.0, start), 2), round(end, 2)
+
+
+def select_clips(candidates: list[dict], cfg: dict, duration: float,
+                 segments: Optional[list[dict]] = None) -> list[dict]:
+    """Přepočítá skóre, přichytí hranice na řeč, zahodí podle délky, vybere nejlepší bez překryvu."""
     c = cfg["clips"]
     min_len, max_len = c["min_seconds"], c["max_seconds"]
     max_overlap = c["max_overlap_percent"] / 100.0
     target = max(1, round(float(c["count_per_hour"]) * duration / 3600))
 
     pool = []
-    for cand in candidates:
+    for raw in candidates:
+        cand = dict(raw)
+        if segments:
+            cand["start"], cand["end"] = refine_bounds(segments, cand["start"], cand["end"],
+                                                      max_len, duration)
         length = cand["end"] - cand["start"]
         if length < min_len or length > max_len or cand["start"] < 0 or cand["end"] > duration + 1:
             continue
@@ -1301,7 +1327,7 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
         candidates = score_with_ai(segments, cfg, rep)
         cand_path.write_text(json.dumps(candidates, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    chosen = select_clips(candidates, cfg, duration)
+    chosen = select_clips(candidates, cfg, duration, segments)
     baseline = int(history.get("median_views") or 0)
     for clip in chosen:
         clip["estimated_views"] = (
@@ -1323,7 +1349,20 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
         clip["output_spec"] = spec
         clip["loadout"] = loadout
         clip["subtitles"] = clean_subtitles(loadout.get("subtitles") if loadout else None)
-        render_clip(video, segments, clip, out_dir, cfg, i, rep)
+        try:
+            render_clip(video, segments, clip, out_dir, cfg, i, rep)
+        except RuntimeError as exc:
+            rep.log(f"Klip {i} se nepovedl ({str(exc)[:160]}). Zkouším jednoduchý střih bez loadoutu a titulků.")
+            plain = copy.deepcopy(cfg)
+            plain["captions"]["enabled"] = False
+            clip["loadout"] = None
+            clip.pop("file", None)
+            try:
+                render_clip(video, segments, clip, out_dir, plain, i, rep)
+            except RuntimeError as exc2:
+                rep.log(f"Klip {i} se nepodařilo vystříhnout, přeskakuji ho ({str(exc2)[:160]}).")
+                clip["failed"] = True
+    chosen = [c for c in chosen if not c.get("failed")]
 
     manifest = {"video_id": video_id, "created": datetime.now().isoformat(timespec="seconds"),
                 "source": source, "clips": chosen}
