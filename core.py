@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -253,8 +254,8 @@ def cache_report(cfg: dict) -> dict:
     return {
         "downloads": _size(downloads),
         "transcripts": sum(_size(j / "transcript.json") for j in jobs.iterdir()) if jobs.exists() else 0,
-        "selections": sum(_size(j / "candidates.json") + _size(j / "clips.json")
-                          for j in jobs.iterdir()) if jobs.exists() else 0,
+        "selections": sum(_size(j / "candidates.json") + _size(j / "candidates_meta.json")
+                          + _size(j / "clips.json") for j in jobs.iterdir()) if jobs.exists() else 0,
         "learning": _size(learning_path(cfg)),
         "total": _size(root),
     }
@@ -284,6 +285,7 @@ def clean_cache(cfg: dict, what: str, rep: Reporter) -> int:
                 remove(job / "transcript.json")
             if what in ("selections", "all"):
                 remove(job / "candidates.json")
+                remove(job / "candidates_meta.json")
                 remove(job / "clips.json")
             if what == "all":
                 remove(job)
@@ -457,7 +459,8 @@ def transcribe(video: Path, out_json: Path, cfg: dict, rep: Reporter) -> list[di
 PROMPT = """You are an expert short-form video editor (YouTube Shorts, TikTok, Instagram Reels). You estimate which moments are most likely to earn views on this creator channel. A higher score means higher expected views, not merely a technically polished clip.
 {context}
 For each clip candidate, score honestly from 0 to 100 on each criterion:
-- view_potential: expected ability to attract views compared with this creator past Shorts; use supplied channel examples when available. 50 is around typical performance, 80+ is notably stronger, below 30 is weak.\n- hook: does the first 3 seconds grab attention (surprise, question, bold claim, conflict)?
+- view_potential: expected ability to attract views compared with this creator past Shorts; use supplied channel examples when available. 50 is around typical performance, 80+ is notably stronger, below 30 is weak.
+- hook: does the first 3 seconds grab attention (surprise, question, bold claim, conflict)?
 - emotion: strength of emotion (laughter, shock, anger, excitement, tension).
 - standalone: understandable without knowing the rest of the stream?
 - payoff: does it end on a punchline, resolution or strong moment?
@@ -623,7 +626,7 @@ def pacing_score(segments: list[dict], start: float, end: float) -> float:
 def score_with_ai(segments: list[dict], cfg: dict, rep: Reporter) -> list[dict]:
     chunk_min = int(cfg["ai"]["chunk_minutes"])
     chunks = build_chunks(segments, chunk_min * 60)
-    per_chunk = max(1, round(float(cfg["clips"]["count_per_hour"]) * chunk_min / 60) + 1)
+    per_chunk = min(8, max(4, round(float(cfg["clips"]["count_per_hour"]) * chunk_min / 60) + 2))
     system = build_prompt(cfg, per_chunk)
     candidates: list[dict] = []
 
@@ -645,7 +648,7 @@ def score_with_ai(segments: list[dict], cfg: dict, rep: Reporter) -> list[dict]:
             candidates.append({
                 "start": round(s, 2),
                 "end": round(e, 2),
-                "view_potential": clamp(float(clip.get("view_potential", 50) or 50)),
+                "view_potential": clamp(float(50 if clip.get("view_potential") is None else clip["view_potential"])),
                 "hook": clamp(float(clip.get("hook", 0) or 0)),
                 "emotion": clamp(float(clip.get("emotion", 0) or 0)),
                 "standalone": clamp(float(clip.get("standalone", 0) or 0)),
@@ -1166,21 +1169,54 @@ def write_ass(path: Path, items: list[tuple[float, float, str]], cap: dict, sub:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
 
 
+def _ffmpeg_error(proc: subprocess.CompletedProcess) -> str:
+    text = (proc.stderr or "").strip()
+    if len(text) <= 2400:
+        return text or f"FFmpeg skončil s kódem {proc.returncode} bez podrobností."
+    return text[:1200] + "\n...\n" + text[-1200:]
+
+
+def _encoder_args(encoder: str, spec: dict) -> list[str]:
+    if encoder == "h264_nvenc":
+        return ["-c:v", encoder, "-preset", "p4", "-tune", "hq",
+                "-rc", "vbr", "-cq", str(max(18, min(28, int(spec["crf"])))),
+                "-b:v", "0", "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-preset", str(spec["preset"]),
+            "-crf", str(int(spec["crf"])), "-pix_fmt", "yuv420p"]
+
+
+def _available_encoders() -> set[str]:
+    try:
+        proc = subprocess.run([ffmpeg_bin(), "-hide_banner", "-encoders"],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=20)
+        data = proc.stdout + proc.stderr
+        return {name for name in ("libx264", "h264_nvenc") if name in data}
+    except (OSError, subprocess.SubprocessError):
+        return {"libx264"}
+
+
+def _plain_video_filter(fmt: str, src_w: int, src_h: int, W: int, H: int) -> str:
+    if fmt == "short":
+        ratio = W / H
+        if src_w / src_h > ratio:
+            cw = _even(src_h * ratio)
+            return f"crop={cw}:{_even(src_h)}:{max(0, (src_w-cw)//2)}:0,scale={W}:{H},setsar=1"
+        ch = _even(src_w / ratio)
+        return f"crop={_even(src_w)}:{ch}:0:{max(0, (src_h-ch)//2)},scale={W}:{H},setsar=1"
+    return f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+
+
 def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
                 cfg: dict, index: int, rep: Reporter,
                 items_override: Optional[list] = None,
                 name_override: Optional[str] = None) -> Path:
-    """Vystřihne klip podle loadoutu (short-form) nebo celého rámce (long-form).
-
-    clip['output_spec'] a clip['src_size'] drží parametry z doby běhu, takže přerenderování
-    v editoru dá stejný výsledek i bez znovu zjištěných údajů o VODu.
-    """
+    """Plný export s loadoutem; při chybě zkusí NVENC a pak skutečný jednoduchý crop/scale."""
     o, cap = cfg["output"], cfg["captions"]
     spec = clip.get("output_spec") or {"width": int(o["width"]), "height": int(o["height"]),
                                        "fps": int(o["fps"]), "crf": int(o["crf"]),
                                        "preset": o["preset"], "audio_bitrate": o["audio_bitrate"]}
     W, H = int(spec["width"]), int(spec["height"])
-
     if name_override:
         name = name_override
     else:
@@ -1190,73 +1226,175 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
         except (KeyError, IndexError, ValueError):
             name = f"klip_{index:02d}"
         name = slugify(name, 120)
-
     duration = float(clip["end"]) - float(clip["start"])
+    if duration <= 0:
+        raise RuntimeError(f"Neplatná délka klipu: {duration:.2f}s")
     src_w, src_h = clip.get("src_size") or [1920, 1080]
     fmt = clip.get("format") or cfg["clips"]["format"]
-    if fmt == "short" and clip.get("loadout"):
-        lo = clean_loadout(clip["loadout"])
-    else:
-        lo = default_loadout(fmt, src_w, src_h, clip.get("effects"))
+    lo = (clean_loadout(clip["loadout"]) if fmt == "short" and clip.get("loadout")
+          else default_loadout(fmt, src_w, src_h, clip.get("effects")))
     photos = [p for p in lo["photos"] if Path(p["path"]).exists()]
     for p in lo["photos"]:
         if p not in photos:
             rep.log(f"Fotka {Path(p['path']).name} nebyla nalezena, přeskakuji ji.")
-
     subs = None
     if cap["enabled"]:
-        if items_override is not None:
-            items = items_override
-        else:
-            items = caption_items(segments, clip["start"], clip["end"],
-                                  int(cap["words_per_caption"]), bool(cap["uppercase"]))
-        write_srt(out_dir / f"{name}.srt", items)  # pro editor
-        sub = clean_subtitles(clip.get("subtitles") or lo.get("subtitles"))
-        ass_name = f"{name}.ass"
-        write_ass(out_dir / ass_name, items, cap, sub, W, H)
-        subs = ass_name
-
+        items = items_override if items_override is not None else caption_items(
+            segments, clip["start"], clip["end"], int(cap["words_per_caption"]), bool(cap["uppercase"]))
+        write_srt(out_dir / f"{name}.srt", items)
+        write_ass(out_dir / f"{name}.ass", items, cap,
+                  clean_subtitles(clip.get("subtitles") or lo.get("subtitles")), W, H)
+        subs = f"{name}.ass"
     graph = loadout_graph(lo, W, H, int(src_w), int(src_h), duration, photos, subs)
-
     out_file = out_dir / f"{name}.mp4"
-    cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error",
-           "-ss", f"{clip['start']:.3f}", "-i", str(video)]
-    for p in photos:
-        cmd += ["-loop", "1", "-i", str(p["path"])]
-    cmd += ["-t", f"{duration:.3f}", "-filter_complex", graph,
-            "-map", "[vout]", "-map", "0:a?",
-            "-r", str(int(spec["fps"])),
-            "-c:v", "libx264", "-preset", str(spec["preset"]), "-crf", str(int(spec["crf"])),
-            "-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart"]
-    fade_views = [v for v in lo["views"] if v.get("anim") == "fade"]
-    if fade_views:
-        d = max(0.1, float(fade_views[0].get("anim_seconds", 0.6)))
-        cmd += ["-af", f"afade=t=in:st=0:d={d}"]
-    cmd.append(out_file.name)
-
-    rep.check()
-    proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace")
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg selhal u klipu {index}: {proc.stderr.strip()[-400:]}")
-
+    start = f"{float(clip['start']):.3f}"
+    encoders = [e for e in ("libx264", "h264_nvenc") if e in _available_encoders()] or ["libx264"]
+    errors = []
+    success = False
+    for encoder in encoders:
+        cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", start, "-i", str(video)]
+        for p in photos:
+            cmd += ["-loop", "1", "-i", str(p["path"])]
+        cmd += ["-t", f"{duration:.3f}", "-filter_complex", graph, "-map", "[vout]", "-map", "0:a?",
+                "-r", str(int(spec["fps"])), "-fps_mode", "cfr"]
+        cmd += _encoder_args(encoder, spec)
+        cmd += ["-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart", out_file.name]
+        rep.check()
+        out_file.unlink(missing_ok=True)
+        rep.log(f"Exportuji plný klip ({encoder})…")
+        proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace")
+        if proc.returncode == 0 and out_file.exists() and out_file.stat().st_size > 1024:
+            success = True
+            break
+        out_file.unlink(missing_ok=True)
+        errors.append(f"{encoder}: {_ffmpeg_error(proc)}")
+    if not success:
+        rep.log("Plný export selhal. Zkouším nouzový střih bez loadoutu, titulků a efektů.")
+        for encoder in encoders:
+            cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", start,
+                   "-i", str(video), "-t", f"{duration:.3f}", "-vf",
+                   _plain_video_filter(fmt, int(src_w), int(src_h), W, H),
+                   "-map", "0:v:0", "-map", "0:a?", "-r", str(int(spec["fps"])), "-fps_mode", "cfr"]
+            cmd += _encoder_args(encoder, spec)
+            cmd += ["-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart", out_file.name]
+            rep.check()
+            out_file.unlink(missing_ok=True)
+            rep.log(f"Nouzový crop/scale ({encoder})…")
+            proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace")
+            if proc.returncode == 0 and out_file.exists() and out_file.stat().st_size > 1024:
+                success = True
+                rep.log("Klip zachráněn nouzovým exportem (bez loadoutu/titulků).")
+                break
+            out_file.unlink(missing_ok=True)
+            errors.append(f"simple {encoder}: {_ffmpeg_error(proc)}")
+    if not success:
+        raise RuntimeError(f"FFmpeg selhal u klipu {index}. " + " | ".join(errors)[-3000:])
     if o["write_txt"]:
         tags = " ".join(clip.get("hashtags", []))
         (out_dir / f"{name}.txt").write_text(
             f"{clip['title']}\n\n{clip.get('description', '')}\n\n{tags}\n\n"
             f"Potenciál: {clip.get('score', 0):.0f}/100\n"
+            f"Odhad views: {clip.get('estimated_views') or 'nedostatek dat'}\n"
             f"Čas ve streamu: {clip['start']:.0f}s - {clip['end']:.0f}s\n"
-            f"Hook {clip.get('hook', 0):.0f} | emoce {clip.get('emotion', 0):.0f} | srozumitelnost "
-            f"{clip.get('standalone', 0):.0f} | pointa {clip.get('payoff', 0):.0f} | humor "
-            f"{clip.get('humor', 0):.0f} | tempo {clip.get('pacing', 0):.0f}\n"
-            f"Proč: {clip.get('reason', '')}\n",
-            encoding="utf-8",
-        )
+            f"Proč: {clip.get('reason', '')}\n", encoding="utf-8")
     clip["file"] = out_file.name
     return out_file
 
 
 # ---------------------------------------------------------------- hlavní běh
+
+
+
+ANALYSIS_CACHE_VERSION = 3
+
+
+def analysis_fingerprint(cfg: dict, history: dict) -> str:
+    ai = cfg["ai"]
+    payload = {
+        "version": ANALYSIS_CACHE_VERSION,
+        "provider": ai.get("provider"),
+        "model": ai.get("ollama_model") if ai.get("provider") == "ollama" else ai.get("openrouter_model"),
+        "speed": ai.get("speed_mode"), "chunk_minutes": ai.get("chunk_minutes"),
+        "category": cfg["clips"].get("category"), "format": cfg["clips"].get("format"),
+        "count_per_hour": cfg["clips"].get("count_per_hour"),
+        "channel_context": ai.get("channel_context"), "extra": ai.get("extra_instructions"),
+        "youtube_examples": [(v.get("title"), v.get("views"), round(v.get("views_per_day", 0), 1))
+                             for v in history.get("videos", [])[:50]],
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def refine_candidates_with_ai(segments: list[dict], candidates: list[dict],
+                              cfg: dict, rep: Reporter) -> list[dict]:
+    """Druhé AI kolo: porovná kandidáty v kontextu a zpřesní skóre i metadata."""
+    if not candidates:
+        return []
+    duration = float(segments[-1]["end"])
+    ranked = sorted(candidates, key=lambda x: final_score(x, cfg), reverse=True)[:24]
+    rows = []
+    for idx, clip in enumerate(ranked):
+        a = max(0.0, float(clip["start"]) - 15.0)
+        b = min(duration, float(clip["end"]) + 15.0)
+        excerpt = " ".join(s["text"] for s in segments if s["end"] > a and s["start"] < b)
+        rows.append({"id": idx, "start": clip["start"], "end": clip["end"],
+                     "title": clip.get("title", ""), "reason": clip.get("reason", ""),
+                     "transcript_context": excerpt[:2400]})
+    system = """You are a senior short-form video editor. Compare candidate moments.
+Prefer a clear hook, understandable context, strong payoff, emotion, humor or surprising gameplay.
+Reject only genuinely incoherent moments, mostly silence, or moments with no meaningful payoff.
+Do not reward generic chatter. Scores are 0-100: 50 is average for this creator, 80+ exceptional,
+below 25 weak. Do not change timestamps. Improve titles and metadata in the transcript language.
+Return ONLY JSON with this shape:
+{"reviews":[{"id":0,"keep":true,"view_potential":0,"hook":0,"emotion":0,
+"standalone":0,"payoff":0,"humor":0,"title":"","description":"",
+"hashtags":["#tag"],"reason":""}]}"""
+    context_parts = []
+    if cfg["ai"].get("channel_context"):
+        context_parts.append("Channel context: " + cfg["ai"]["channel_context"])
+    if cfg["ai"].get("youtube_context"):
+        context_parts.append(cfg["ai"]["youtube_context"])
+    learned = learning_block(cfg)
+    if learned:
+        context_parts.append(learned)
+    if category_line(cfg):
+        context_parts.append(category_line(cfg))
+    if context_parts:
+        system += "\n\nCreator context:\n" + "\n".join(context_parts)
+    user = "Compare these candidates using the creator context above:\n" + json.dumps(
+        rows, ensure_ascii=False)
+    rep.log(f"Druhé AI kolo: porovnávám {len(rows)} kandidátů a upravuji pořadí/metadata…")
+    try:
+        raw = ask_llm(cfg, system, user, rep)
+        left, right = raw.find("{"), raw.rfind("}")
+        if left < 0 or right <= left:
+            raise ValueError("AI nevrátila JSON")
+        reviews = json.loads(raw[left:right + 1]).get("reviews", [])
+        by_id = {int(x["id"]): x for x in reviews if isinstance(x, dict) and "id" in x}
+        refined = []
+        for idx, original in enumerate(ranked):
+            review = by_id.get(idx)
+            if not review:
+                refined.append(original)
+                continue
+            if review.get("keep") is False:
+                continue
+            item = dict(original)
+            for key in ("view_potential", "hook", "emotion", "standalone", "payoff", "humor"):
+                if review.get(key) is not None:
+                    item[key] = clamp(float(review[key]))
+            for key in ("title", "description", "reason"):
+                if str(review.get(key, "")).strip():
+                    item[key] = str(review[key]).strip()
+            if isinstance(review.get("hashtags"), list):
+                item["hashtags"] = [str(x) for x in review["hashtags"] if str(x).strip()][:8]
+            refined.append(item)
+        return refined or candidates
+    except Exception as exc:
+        rep.log(f"Druhé AI kolo se nepovedlo ({exc}); ponechávám první hodnocení.")
+        return candidates
 
 
 def format_youtube_history(history: dict) -> str:
@@ -1320,12 +1458,25 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
         rep.log(f"YouTube statistiky nejsou dostupné ({exc}); pokračuji bez personalizace.")
 
     cand_path = job / "candidates.json"
-    if cand_path.exists() and not reselect:
-        rep.log("Hodnocení AI je v cache, nevolám AI znovu (změna nastavení se projeví hned).")
+    meta_path = job / "candidates_meta.json"
+    fingerprint = analysis_fingerprint(cfg, history)
+    cache_valid = False
+    if cand_path.exists() and meta_path.exists() and not reselect:
+        try:
+            cache_valid = json.loads(meta_path.read_text(encoding="utf-8")).get("fingerprint") == fingerprint
+        except (OSError, json.JSONDecodeError, AttributeError):
+            cache_valid = False
+    if cache_valid:
+        rep.log("Analýza AI je v platné cache (stejný model, nastavení i YouTube kontext).")
         candidates = json.loads(cand_path.read_text(encoding="utf-8"))
     else:
+        if cand_path.exists():
+            rep.log("Cache analýzy je zastaralá nebo se změnilo nastavení; spouštím novou analýzu.")
         candidates = score_with_ai(segments, cfg, rep)
+        candidates = refine_candidates_with_ai(segments, candidates, cfg, rep)
         cand_path.write_text(json.dumps(candidates, ensure_ascii=False, indent=1), encoding="utf-8")
+        meta_path.write_text(json.dumps({"version": ANALYSIS_CACHE_VERSION,
+                                         "fingerprint": fingerprint}, indent=1), encoding="utf-8")
 
     chosen = select_clips(candidates, cfg, duration, segments)
     baseline = int(history.get("median_views") or 0)
@@ -1352,16 +1503,9 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
         try:
             render_clip(video, segments, clip, out_dir, cfg, i, rep)
         except RuntimeError as exc:
-            rep.log(f"Klip {i} se nepovedl ({str(exc)[:160]}). Zkouším jednoduchý střih bez loadoutu a titulků.")
-            plain = copy.deepcopy(cfg)
-            plain["captions"]["enabled"] = False
-            clip["loadout"] = None
-            clip.pop("file", None)
-            try:
-                render_clip(video, segments, clip, out_dir, plain, i, rep)
-            except RuntimeError as exc2:
-                rep.log(f"Klip {i} se nepodařilo vystříhnout, přeskakuji ho ({str(exc2)[:160]}).")
-                clip["failed"] = True
+            rep.log(f"Klip {i} se nepodařilo exportovat ani po všech záložních postupech: {str(exc)[:900]}")
+            clip["failed"] = True
+
     chosen = [c for c in chosen if not c.get("failed")]
 
     manifest = {"video_id": video_id, "created": datetime.now().isoformat(timespec="seconds"),

@@ -247,7 +247,7 @@ class App(ctk.CTk):
         self.pages["create"] = page
         self._title(page, "Vytvořit klipy",
                     "Vlož URL VODu nebo cestu k videu. AI najde momenty, každému dá hodnocení 0 až 100 "
-                    "a vystřihne vertikální klipy. Klipy pod nastaveným prahem se nevytvoří.")
+                    "a vystřihne vertikální klipy. AI porovná kandidáty a vybere nejsilnější momenty.")
 
         self._build_setup_card(page)
 
