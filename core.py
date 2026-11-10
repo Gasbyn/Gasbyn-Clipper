@@ -1173,7 +1173,7 @@ def _ffmpeg_error(proc: subprocess.CompletedProcess) -> str:
     text = (proc.stderr or "").strip()
     if len(text) <= 2400:
         return text or f"FFmpeg skončil s kódem {proc.returncode} bez podrobností."
-    return text[:1200] + "\\n...\\n" + text[-1200:]
+    return text[:1200] + "\n...\n" + text[-1200:]
 
 
 def _encoder_args(encoder: str, spec: dict) -> list[str]:
