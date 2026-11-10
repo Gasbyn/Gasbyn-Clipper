@@ -540,7 +540,7 @@ def _call_llm(cfg: dict, system: str, user: str) -> str:
                             "num_ctx": int(ai["ollama_num_ctx"])},
                 "messages": messages,
             },
-            timeout=timeout,
+            timeout=(5, timeout),
         )
         r.raise_for_status()
         return r.json()["message"]["content"]
@@ -551,7 +551,7 @@ def _call_llm(cfg: dict, system: str, user: str) -> str:
         headers={"Authorization": f"Bearer {key}"},
         json={"model": ai["openrouter_model"], "temperature": float(ai["temperature"]),
               "messages": messages},
-        timeout=timeout,
+        timeout=(5, timeout),
     )
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
