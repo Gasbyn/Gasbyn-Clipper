@@ -1294,11 +1294,11 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
     if o["write_txt"]:
         tags = " ".join(clip.get("hashtags", []))
         (out_dir / f"{name}.txt").write_text(
-            f"{clip['title']}\\n\\n{clip.get('description', '')}\\n\\n{tags}\\n\\n"
-            f"Potenciál: {clip.get('score', 0):.0f}/100\\n"
-            f"Odhad views: {clip.get('estimated_views') or 'nedostatek dat'}\\n"
-            f"Čas ve streamu: {clip['start']:.0f}s - {clip['end']:.0f}s\\n"
-            f"Proč: {clip.get('reason', '')}\\n", encoding="utf-8")
+            f"{clip['title']}\n\n{clip.get('description', '')}\n\n{tags}\n\n"
+            f"Potenciál: {clip.get('score', 0):.0f}/100\n"
+            f"Odhad views: {clip.get('estimated_views') or 'nedostatek dat'}\n"
+            f"Čas ve streamu: {clip['start']:.0f}s - {clip['end']:.0f}s\n"
+            f"Proč: {clip.get('reason', '')}\n", encoding="utf-8")
     clip["file"] = out_file.name
     return out_file
 
