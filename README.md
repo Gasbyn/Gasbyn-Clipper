@@ -37,27 +37,31 @@ Nastavení, klipy, cache, loadouty a YouTube přihlášení jsou ve složce `%AP
    Tlačítko **Upravit** otevře editor, **Přehrát** otevře klip ve výchozím přehrávači.
    Pod každým klipem jsou tlačítka **👍 Líbí se** a **👎 Nelíbí**, ze kterých se AI učí (viz níže).
 
-### Vyhledání videa a loadout
+### Video, typ, kategorie a loadout
 
-Na první stránce můžeš **najít video** na Kicku: zadej jméno kanálu (např. `gasbyn`), zaškrtni *Videa (VOD)* a/nebo *Klipy a shorty* a klikni **Hledat**. Zobrazí se nejnovější položky, **Vybrat** je vloží do pole pro URL.
+Na stránce **Vytvořit klipy** vlož URL VODu (nebo cestu k souboru). Nad tlačítky najdeš:
+- **Typ**: *Short-form (9:16)* nebo *Long-form*. Vybráním jednoho se druhý vypne. Short-form dělá vertikální klipy do 60 s, long-form delší klipy (délku určí AI podle VODu).
+- **Kategorie** streamu: Gaming, Vlog, IRL, Reakce, Tutorial, Podcast, Sport, Hudba, Ostatní. AI podle ní hledá typické momenty.
+- **Jazyk řeči**: čeština, slovenština nebo angličtina.
+- **Titulky**: zapnout/vypnout.
 
-Tlačítko **Načíst video a nastavit loadout** stáhne video, vytáhne první snímek a otevře **Loadout 9:16**:
-- Až 5 **záběrů** z jednoho snímku (např. kamera nahoře, hra dole). Každý táhni v náhledu rámce, nastav výřez a místo ve 9:16 (posuvníky nebo tažením myší).
+Tlačítko **Načíst video a nastavit loadout** stáhne video, vybere vhodný snímek z celého VODu a otevře **Loadout 9:16**. Výběr snímku běží bez AI, takže je rychlý a nic se nevolá v Ollamě.
+- Až 5 **záběrů** z jednoho snímku (např. kamera nahoře, hra dole). Každý táhni v náhledu rámce, nastav výřez a místo ve 9:16 (posuvníky, tažením myší nebo klávesnicí).
+- **Titulky**: poloha (X, Y) a velikost písma. Text v náhledu můžeš táhnout myší.
 - **Fotky** z disku, s časem, kdy se mají ukazovat.
 - **Animace na začátku** pro každý záběr i fotku: Fade in, Unblur in, Třes (jen na začátku).
 - **Knihovna**: loadout se uloží pod názvem a jde načíst u dalšího VODu. Poslední použitý se nabídne automaticky.
 
-Loadout platí jen pro **short-form** (9:16). Pro long-form se bere celý rámec.
+Loadout platí jen pro short-form. Pro long-form se bere celý rámec, titulky se ale nastavují stejně.
 
-### Formát klipů a rychlost
+### Klávesnice
 
-V sekci **Vytvořit klipy** zvol:
-- **Short-form**: vertikální klipy do 60 s (výchozí)
-- **Long-form**: delší klipy od 60 s, délku nastavíš v minutách (až 60 min)
-
-V sekci **AI** je **Priorita rychlosti**: *rychlé* použije menší přepis a kratší kontext (o něco nižší přesnost), *vyvážené* je výchozí, *kvalitní* je nejpřesnější a nejpomalejší.
-
-Rozlišení, bitrate a kvalita (CRF) se nastavují automaticky podle konkrétního VODu. Proto je v Nastavení jen to, co opravdu měníš.
+- **Ctrl + 1 až 4**: přepnutí mezi stránkami (Vytvořit klipy, Hotové klipy, Nastavení, Cache).
+- **Esc**: zpět z loadoutu na Vytvořit klipy.
+- **Šipky** v loadoutu posouvají vybranou vrstvu (nebo titulky), **Shift + šipka** jde po větších krocích, **Ctrl + šipka** posouvá výřez záběru.
+- **+ / -** mění velikost vrstvy (nebo písma titulků), **[** a **]** přepínají vrstvy, **Delete** smaže vybranou vrstvu.
+- **Šipky** na posuvníku ho posunou o krok, po kliknutí na posuvník.
+- **Tab** přepíná mezi políčky. Tlačítka a přepínače jsou myší.
 
 ### Průběh a odhad
 
@@ -162,6 +166,6 @@ Potřebuješ Python 3.10+ a ffmpeg v PATH. Výchozí nastavení se znovu vygener
 - Hodnocení AI je odhad. Skóre 0 až 100 neznamená, že klip bude mít úspěch.
 - Editor nemá vestavěný náhled videa a nelze v něm klip prodloužit.
 - Loadout zatím neotáčí záběry a nepřidává přechody mezi nimi. Náhled je statický, animace uvidíš až ve výsledném klipu.
-- Vyhledávání na Kicku používá neoficiální API kanálu. Pokud Kick změní strukturu, hledání přestane fungovat, ale stažení přes URL dál poběží.
+- Vyhledávání videí na Kicku bylo odstraněno, protože neoficiální API nefungovalo spolehlivě. Video vlož přes URL (zkopíruj adresu VODu z Kicku).
 - Ollama a model AI instalační program nezabalí. Stahují se z oficiálních zdrojů až při prvním spuštění, takže bez internetu nejde klipovat.
 - Odhad času je jen odhad z dosavadního tempa a při prvním běhu (stahování modelů) bývá méně přesný.

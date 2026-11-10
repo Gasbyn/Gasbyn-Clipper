@@ -482,9 +482,33 @@ META_OFF = ("- description: leave empty.\n"
             "- hashtags: leave empty list.")
 
 
+CATEGORIES = {
+    "Gaming": "gameplay moments: clutch plays, fails, rage, funny game events, big reactions to outcomes",
+    "Vlog": "personal moments, stories, honest reflections, behind-the-scenes",
+    "IRL": "real-life situations away from the game, everyday encounters, surprising moments",
+    "Reakce": "reactions to videos, news or content, strong opinions and commentary",
+    "Tutorial": "clear explanations, tips and step-by-step know-how that makes sense on its own",
+    "Podcast": "interesting claims, debates and quotable insights from conversation",
+    "Sport": "highlights, goals, big moments and celebrations",
+    "Hudba": "performances, singing, funny music moments, reactions to songs",
+    "Ostatní": "any strong, self-contained moment",
+}
+
+
+def category_line(cfg: dict) -> str:
+    cat = cfg["clips"].get("category", "Gaming")
+    hint = CATEGORIES.get(cat)
+    return f"Stream category: {cat}. Prefer moments typical for this category: {hint}." if hint else ""
+
+
 def build_prompt(cfg: dict, n: int) -> str:
     c, ai = cfg["clips"], cfg["ai"]
-    context = f"Channel context: {ai['channel_context']}" if ai["channel_context"].strip() else ""
+    ctx_parts = []
+    if ai["channel_context"].strip():
+        ctx_parts.append(f"Channel context: {ai['channel_context']}")
+    if category_line(cfg):
+        ctx_parts.append(category_line(cfg))
+    context = "\n".join(ctx_parts)
     extra = f"Extra instructions from the creator: {ai['extra_instructions']}" if ai["extra_instructions"].strip() else ""
     meta = META_ON if ai.get("_meta", True) else META_OFF
     youtube_context = ai.get("youtube_context", "")
@@ -843,7 +867,8 @@ def _vision_frame_score(png: Path, cfg: dict, timeout: int = 120) -> dict:
 
 
 def pick_best_frame(video: Path, duration: float, out_png: Path, cfg: dict,
-                    log: Callable[[str], None] = print, candidates: int = 12) -> Path:
+                    log: Callable[[str], None] = print, candidates: int = 12,
+                    use_ai: bool = False) -> Path:
     """Najde vhodný úvodní snímek: prohledá VOD a vybere záběr s webkamerou (samotnou nebo s hrou).
 
     Když Ollama neběží nebo model neumí obrázky, použije jednoduché hodnocení kontrastu.
@@ -854,7 +879,7 @@ def pick_best_frame(video: Path, duration: float, out_png: Path, cfg: dict,
     tmp = out_png.parent / "candidates" / out_png.stem
     tmp.mkdir(parents=True, exist_ok=True)
     times = [duration * (0.05 + 0.9 * i / max(1, candidates - 1)) for i in range(candidates)]
-    log(f"Hledám vhodný snímek ({candidates} kandidátů z celého VODu)…")
+    log(f"Hledám vhodný snímek ({candidates} kandidátů z celého VODu, bez AI)…")
 
     scored = []
     for i, t in enumerate(times):
@@ -865,7 +890,7 @@ def pick_best_frame(video: Path, duration: float, out_png: Path, cfg: dict,
             h = 0.0
         scored.append({"t": t, "png": png, "heur": h, "vision": None})
 
-    use_vision = True
+    use_vision = use_ai
     for c in scored:
         if not use_vision:
             break
@@ -917,6 +942,22 @@ def auto_output(cfg: dict, probe: dict) -> dict:
 
 # ---------------------------------------------------------------- loadouty
 
+SUBTITLE_DEFAULT = {"x": 0.5, "y": 0.8, "size": 60}
+
+
+def clean_subtitles(s: Optional[dict]) -> dict:
+    """Poloha titulků (x, y jako podíl šířky/výšky, střed textu) a velikost písma v px."""
+    s = s or {}
+    def clamp01(v: float) -> float:
+        return max(0.0, min(1.0, v))
+    try:
+        return {"x": clamp01(float(s.get("x", SUBTITLE_DEFAULT["x"]))),
+                "y": clamp01(float(s.get("y", SUBTITLE_DEFAULT["y"]))),
+                "size": int(max(16, min(200, float(s.get("size", SUBTITLE_DEFAULT["size"])))))}
+    except (TypeError, ValueError):
+        return dict(SUBTITLE_DEFAULT)
+
+
 def default_loadout(fmt: str, src_w: int, src_h: int, effects: Optional[dict] = None) -> dict:
     """Výchozí rozložení: short-form = střed 9:16 z rámce, long-form = celý rámec."""
     fx = {**default_effects(), **(effects or {})}
@@ -936,7 +977,8 @@ def default_loadout(fmt: str, src_w: int, src_h: int, effects: Optional[dict] = 
                                  round(float(fx["image_y"]) - s / 2, 4), s, s],
                        "anim": "none", "anim_seconds": 0.6,
                        "start": float(fx["image_start"]), "end": float(fx["image_end"])})
-    return {"name": "výchozí", "background": "#000000", "views": views, "photos": photos}
+    return {"name": "výchozí", "background": "#000000", "views": views, "photos": photos,
+            "subtitles": dict(SUBTITLE_DEFAULT)}
 
 
 def clean_loadout(lo: dict) -> dict:
@@ -953,6 +995,7 @@ def clean_loadout(lo: dict) -> dict:
                               "anim": p.get("anim", "none") if p.get("anim") in EFFECT_KINDS else "none",
                               "anim_seconds": float(p.get("anim_seconds", 0.6)),
                               "start": float(p.get("start", 0)), "end": float(p.get("end", 0))})
+    out["subtitles"] = clean_subtitles(lo.get("subtitles"))
     return out
 
 
@@ -1018,7 +1061,7 @@ def _anim_chain(src: str, out: str, kind: str, d: float, w: int, h: int, tag: st
 
 
 def loadout_graph(lo: dict, W: int, H: int, src_w: int, src_h: int, duration: float,
-                  photos: list[dict], subs: Optional[tuple[str, str]]) -> str:
+                  photos: list[dict], subs: Optional[str]) -> str:
     """Složí filter_complex: záběry (vstup 0), fotky (vstupy 1..n), titulky, výstup [vout]."""
     parts = []
     bg = str(lo.get("background", "#000000")).lstrip("#")
@@ -1056,24 +1099,45 @@ def loadout_graph(lo: dict, W: int, H: int, src_w: int, src_h: int, duration: fl
                      f":enable='between(t,{start:.2f},{end:.2f})'[{nxt}]")
         cur = nxt
     if subs:
-        parts.append(f"[{cur}]subtitles={subs[0]}:force_style='{subs[1]}',format=yuv420p[vout]")
+        parts.append(f"[{cur}]subtitles={subs},format=yuv420p[vout]")
     else:
         parts.append(f"[{cur}]format=yuv420p[vout]")
     return ";".join(parts)
 
 
-def caption_style(cap: dict) -> str:
-    return ",".join([
-        f"FontName={cap['font']}",
-        f"FontSize={int(cap['font_size'])}",
-        f"PrimaryColour={cap['text_color']}",
-        f"OutlineColour={cap['outline_color']}",
-        f"Outline={int(cap['outline_width'])}",
-        f"Shadow={int(cap['shadow'])}",
-        f"Bold={1 if cap['bold'] else 0}",
-        f"Alignment={POSITION_ALIGN.get(cap['position'], 2)}",
-        f"MarginV={int(cap['margin_v'])}",
-    ])
+def ass_time(t: float) -> str:
+    cs = int(round(t * 100))
+    h, cs = divmod(cs, 360000)
+    m, cs = divmod(cs, 6000)
+    s, cs = divmod(cs, 100)
+    return f"{h}:{m:02}:{s:02}.{cs:02}"
+
+
+def write_ass(path: Path, items: list[tuple[float, float, str]], cap: dict, sub: dict,
+              W: int, H: int) -> None:
+    """Titulky v ASS: střed textu na pozici z loadoutu (x, y), velikost v px výstupu."""
+    style = ",".join([
+        "Default", str(cap["font"]), str(int(sub["size"])), str(cap["text_color"]), "&H000000FF",
+        str(cap["outline_color"]), "&H64000000", "-1" if cap["bold"] else "0", "0", "0", "0",
+        "100", "100", "0", "0", "1", str(int(cap["outline_width"])), str(int(cap["shadow"])),
+        "5", "40", "40", "0", "1"])
+    px, py = int(round(sub["x"] * W)), int(round(sub["y"] * H))
+    lines = [
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}",
+        "WrapStyle: 0", "ScaledBorderAndShadow: yes", "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: {style}", "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    for a, b, text in items:
+        clean = text.replace("{", "(").replace("}", ")").replace("\n", " ").replace("\r", " ")
+        lines.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Default,,0,0,0,,"
+                     f"{{\\pos({px},{py})}}{clean}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
 
 
 def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
@@ -1120,9 +1184,11 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
         else:
             items = caption_items(segments, clip["start"], clip["end"],
                                   int(cap["words_per_caption"]), bool(cap["uppercase"]))
-        srt_name = f"{name}.srt"
-        write_srt(out_dir / srt_name, items)
-        subs = (srt_name, caption_style(cap))
+        write_srt(out_dir / f"{name}.srt", items)  # pro editor
+        sub = clean_subtitles(clip.get("subtitles") or lo.get("subtitles"))
+        ass_name = f"{name}.ass"
+        write_ass(out_dir / ass_name, items, cap, sub, W, H)
+        subs = ass_name
 
     graph = loadout_graph(lo, W, H, int(src_w), int(src_h), duration, photos, subs)
 
@@ -1256,6 +1322,7 @@ def run_job(source: str, cfg: dict, rep: Reporter, *, reselect: bool = False,
         clip["src_size"] = [probe["width"], probe["height"]]
         clip["output_spec"] = spec
         clip["loadout"] = loadout
+        clip["subtitles"] = clean_subtitles(loadout.get("subtitles") if loadout else None)
         render_clip(video, segments, clip, out_dir, cfg, i, rep)
 
     manifest = {"video_id": video_id, "created": datetime.now().isoformat(timespec="seconds"),

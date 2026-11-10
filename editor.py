@@ -19,7 +19,7 @@ import customtkinter as ctk
 from tkinter import filedialog
 
 import youtube
-from core import (Reporter, Cancelled, DATA_ROOT, get_source, parse_srt, render_clip,
+from core import (Reporter, Cancelled, DATA_ROOT, clean_subtitles, get_source, parse_srt, render_clip,
                   default_effects)
 
 INTRO_LABELS = {"none": "Žádná", "fade": "Fade in", "unblur": "Unblur in",
@@ -199,6 +199,13 @@ class EditorPage(ctk.CTkFrame):
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
 
+        ctk.CTkLabel(right, text="POLOHA TITULKŮ", font=_fnt(12, True), text_color=ORANGE
+                     ).pack(anchor="w", pady=(14, 0))
+        self.sub_x = self._slider(right, "Poloha X", 0.5, 0, 1)
+        self.sub_y = self._slider(right, "Poloha Y", 0.8, 0, 1)
+        self.sub_size = self._slider(right, "Velikost písma", 60, 16, 200,
+                                     fmt=lambda v: f"{v:.0f} px")
+
         caps_head = ctk.CTkFrame(right, fg_color="transparent")
         caps_head.pack(fill="x", pady=(14, 6))
         ctk.CTkLabel(caps_head, text="TITULKY", font=_fnt(12, True), text_color=ORANGE
@@ -229,6 +236,10 @@ class EditorPage(ctk.CTkFrame):
         self.desc_box.insert("1.0", clip.get("description", ""))
         self.tags_var.set(" ".join(clip.get("hashtags", [])))
         self._load_fx(clip.get("effects") or {})
+        sub = clean_subtitles(clip.get("subtitles") or (clip.get("loadout") or {}).get("subtitles"))
+        self.sub_x.set(sub["x"])
+        self.sub_y.set(sub["y"])
+        self.sub_size.set(sub["size"])
         self.selected = None
         self._rebuild_rows()
         self._redraw()
@@ -408,7 +419,7 @@ class EditorPage(ctk.CTkFrame):
 
     # ------------------------------------------------------------ animace a fotka
 
-    def _slider(self, parent, label: str, value: float, lo: float, hi: float) -> ctk.DoubleVar:
+    def _slider(self, parent, label: str, value: float, lo: float, hi: float, fmt=None) -> ctk.DoubleVar:
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", pady=(8, 0))
         head = ctk.CTkFrame(row, fg_color="transparent")
@@ -417,13 +428,17 @@ class EditorPage(ctk.CTkFrame):
         shown = ctk.CTkLabel(head, text="", font=_fnt(11), text_color=TEXT)
         shown.pack(side="right")
         var = ctk.DoubleVar(value=value)
+        show = fmt or (lambda v: f"{v * 100:.0f} %")
 
         def update(_value=None) -> None:
-            shown.configure(text=f"{var.get() * 100:.0f} %")
+            shown.configure(text=show(var.get()))
 
-        ctk.CTkSlider(row, from_=lo, to=hi, variable=var, height=14, button_color=ORANGE,
-                      button_hover_color=ORANGE_LIGHT, progress_color=ORANGE, fg_color=INPUT,
-                      command=update).pack(fill="x")
+        slider = ctk.CTkSlider(row, from_=lo, to=hi, variable=var, height=14, button_color=ORANGE,
+                               button_hover_color=ORANGE_LIGHT, progress_color=ORANGE, fg_color=INPUT,
+                               command=update)
+        slider.pack(fill="x")
+        slider.kb = (lo, hi, var)  # šipky na klávesnici
+        slider.bind("<Button-1>", lambda e, s=slider: s.focus_set(), add="+")
         var.trace_add("write", lambda *_: update())
         update()
         return var
@@ -558,6 +573,8 @@ class EditorPage(ctk.CTkFrame):
             "description": self.desc_box.get("1.0", "end").strip(),
             "hashtags": tags,
             "effects": effects,
+            "subtitles": clean_subtitles({"x": self.sub_x.get(), "y": self.sub_y.get(),
+                                          "size": self.sub_size.get()}),
         })
         cfg = copy.deepcopy(self.app.cfg)
         folder, file_name, source = self.folder, self.file_name, self.manifest.get("source", "")
@@ -570,7 +587,8 @@ class EditorPage(ctk.CTkFrame):
             for c in data.get("clips", []):
                 if c.get("file") == file_name:
                     c.update({k: new_clip[k] for k in
-                              ("start", "end", "title", "description", "hashtags", "effects")})
+                              ("start", "end", "title", "description", "hashtags", "effects",
+                               "subtitles")})
             (folder / "clips.json").write_text(json.dumps(data, ensure_ascii=False, indent=1),
                                                encoding="utf-8")
             if downloaded and not cfg["download"]["keep_source"]:

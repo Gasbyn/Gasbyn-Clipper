@@ -49,6 +49,9 @@ SECTIONS: list[tuple[str, str, list[F]]] = [
     ]),
 
     ("clips", "Vytvořit klipy", [
+        F("category", "Gaming", "choice", "Kategorie streamu",
+          "Podle kategorie AI hledá typické momenty. Nastavuje se na záložce Vytvořit klipy.",
+          options=["Gaming", "Vlog", "IRL", "Reakce", "Tutorial", "Podcast", "Sport", "Hudba", "Ostatní"]),
         F("format", "short", "choice", "Formát klipů",
           "short = vertikální klipy 9:16 do 60 s (podle loadoutu). long = delší klipy 16:9 od 60 s, "
           "délku nastavíš níže.", options=["short", "long"]),
@@ -216,6 +219,23 @@ SECTIONS: list[tuple[str, str, list[F]]] = [
           "Když je nová verze, stáhne a nainstaluje ji sama a restartuje aplikaci. Vypnuté = jen zobrazí tlačítko."),
     ]),
 ]
+
+
+
+# Co se nastavuje automaticky (na záložce Vytvořit klipy nebo podle VODu) - v Nastavení se neukazuje.
+AUTO_KEYS = {
+    ("clips", "format"), ("clips", "category"), ("clips", "long_minutes"), ("clips", "max_seconds"),
+    ("clips", "count_per_hour"), ("clips", "min_score"),
+    ("transcription", "language"),
+    ("captions", "enabled"), ("captions", "font_size"), ("captions", "position"),
+    ("captions", "margin_v"),
+    ("download", "retries"),
+    ("ai", "temperature"), ("ai", "max_retries"), ("ai", "timeout_s"),
+}
+for _sec, _title, _fields in SECTIONS:
+    for _f in _fields:
+        if (_sec, _f.key) in AUTO_KEYS:
+            _f.show = False
 
 
 def default_settings() -> dict:

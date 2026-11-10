@@ -12,7 +12,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from core import (EFFECT_KINDS, LOADOUT_MAX_VIEWS, clean_loadout, list_loadouts,
+from core import (EFFECT_KINDS, LOADOUT_MAX_VIEWS, clean_loadout, clean_subtitles, list_loadouts,
                   load_loadout, save_loadout)
 
 BG = "#08090B"
@@ -30,6 +30,7 @@ FONT = "Segoe UI"
 
 VIEW_COLORS = ["#FF6A00", "#48D597", "#60A5FA", "#FBBF24", "#F472B6"]
 PHOTO_COLOR = "#E879F9"
+SUBTITLE_SAMPLE = "Ukázka titulků"
 ANIM_LABELS = {"none": "Žádná", "fade": "Fade in", "unblur": "Unblur in",
                "shake": "Třes na začátku"}
 ANIM_KEYS = {v: k for k, v in ANIM_LABELS.items()}
@@ -60,13 +61,15 @@ class LoadoutPage(ctk.CTkFrame):
         self._frame_photo = None
         self._prev_photo = None
         self._photo_cache: dict[str, Image.Image | None] = {}
-        self.lo: dict = {"name": "nový", "background": "#000000", "views": [], "photos": []}
+        self.lo: dict = {"name": "nový", "background": "#000000", "views": [], "photos": [],
+                             "subtitles": {"x": 0.5, "y": 0.8, "size": 60}}
         self.sel: tuple[str, int] | None = None
         self.drag: tuple | None = None
         self._loading = False
         self._layer_map: dict[str, tuple[str, int]] = {}
         self.sliders: dict[str, ctk.CTkSlider] = {}
         self.vars: dict[str, ctk.DoubleVar] = {}
+        self._fmts: dict[str, object] = {}
         self._build()
 
     # ------------------------------------------------------------ rozložení
@@ -163,6 +166,11 @@ class LoadoutPage(ctk.CTkFrame):
         self._slider(parent, "pw", "Šířka", 0.05, 1)
         self._slider(parent, "ph", "Výška", 0.05, 1)
 
+        self._section(parent, "Titulky (táhni text v náhledu nebo šipkami)")
+        self._slider(parent, "sx", "Poloha X titulků", 0, 1)
+        self._slider(parent, "sy", "Poloha Y titulků", 0, 1)
+        self._slider(parent, "ssize", "Velikost písma", 16, 200, fmt=lambda v: f"{v:.0f} px")
+
         parent = col2
         self._section(parent, "Animace na začátku")
         self.anim_var = ctk.StringVar(value=ANIM_LABELS["none"])
@@ -199,7 +207,7 @@ class LoadoutPage(ctk.CTkFrame):
         ctk.CTkLabel(parent, text=text, font=_fnt(11, True), text_color=MUTED
                      ).pack(anchor="w", padx=14, pady=(16, 2))
 
-    def _slider(self, parent, key: str, label: str, lo: float, hi: float) -> None:
+    def _slider(self, parent, key: str, label: str, lo: float, hi: float, fmt=None) -> None:
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", padx=14, pady=(6, 0))
         head = ctk.CTkFrame(row, fg_color="transparent")
@@ -209,11 +217,14 @@ class LoadoutPage(ctk.CTkFrame):
         shown.pack(side="right")
         var = ctk.DoubleVar(value=0.0)
         self.vars[key] = var
+        self._fmts[key] = fmt or (lambda v: f"{v * 100:.0f} %")
         slider = ctk.CTkSlider(row, from_=lo, to=hi, variable=var, height=14, button_color=ORANGE,
                                button_hover_color=ORANGE_LIGHT, progress_color=ORANGE,
                                fg_color=INPUT)
         slider.pack(fill="x")
         self.sliders[key] = slider
+        slider.kb = (lo, hi, var)  # šipky na klávesnici posouvají tenhle posuvník
+        slider.bind("<Button-1>", lambda e, s=slider: s.focus_set(), add="+")
         var.trace_add("write", lambda *_: self._on_slider(key, shown))
 
     def _entry_row(self, parent, label: str, var: ctk.StringVar) -> None:
@@ -231,7 +242,7 @@ class LoadoutPage(ctk.CTkFrame):
         self.prep = prep
         probe = prep["probe"]
         self.sub.configure(text=f"Video {probe['width']}x{probe['height']}, {probe['duration'] / 60:.0f} min")
-        if self.app.cfg["clips"]["format"] != "short":
+        if self.app.format_seg.get() == "Long-form":
             self.note.configure(text="Loadout se použije jen pro short-form (9:16). "
                                      "Teď je v Nastavení zvolený long-form.")
         else:
@@ -252,6 +263,7 @@ class LoadoutPage(ctk.CTkFrame):
             names.append((f"Záběr {i + 1}", ("v", i)))
         for j in range(len(self.lo["photos"])):
             names.append((f"Fotka {j + 1}", ("p", j)))
+        names.append(("Titulky", ("s", 0)))
         return names
 
     def _refresh_layers(self) -> None:
@@ -265,7 +277,7 @@ class LoadoutPage(ctk.CTkFrame):
                                     else "disabled")
 
     def _layer(self) -> dict | None:
-        if not self.sel:
+        if not self.sel or self.sel[0] == "s":  # titulky nejsou vrstva s rámečkem
             return None
         kind, i = self.sel
         items = self.lo["views"] if kind == "v" else self.lo["photos"]
@@ -281,12 +293,16 @@ class LoadoutPage(ctk.CTkFrame):
         layer = self._layer()
         self._loading = True
         try:
+            sub = self.lo["subtitles"]
+            self.vars["sx"].set(sub["x"])
+            self.vars["sy"].set(sub["y"])
+            self.vars["ssize"].set(sub["size"])
             is_view = bool(self.sel and self.sel[0] == "v")
             for key in ("cx", "cy", "cw", "ch"):
                 self.sliders[key].configure(state="normal" if is_view else "disabled")
             if layer is None:
-                for var in self.vars.values():
-                    var.set(0.0)
+                for key in ("cx", "cy", "cw", "ch", "px", "py", "pw", "ph"):
+                    self.vars[key].set(0.0)
                 self.anim_var.set(ANIM_LABELS["none"])
                 self.secs_var.set("0.6")
                 return
@@ -305,8 +321,18 @@ class LoadoutPage(ctk.CTkFrame):
 
     def _on_slider(self, key: str, shown) -> None:
         val = self.vars[key].get()
-        shown.configure(text=f"{val * 100:.0f} %")
+        shown.configure(text=self._fmts[key](val))
         if self._loading:
+            return
+        if key in ("sx", "sy", "ssize"):
+            sub = self.lo["subtitles"]
+            if key == "sx":
+                sub["x"] = _clamp(val)
+            elif key == "sy":
+                sub["y"] = _clamp(val)
+            else:
+                sub["size"] = int(max(16, min(200, round(val))))
+            self._redraw()
             return
         layer = self._layer()
         if layer is None:
@@ -369,7 +395,7 @@ class LoadoutPage(ctk.CTkFrame):
         self._redraw()
 
     def _delete(self) -> None:
-        if not self.sel:
+        if not self.sel or self.sel[0] == "s":
             return
         kind, i = self.sel
         items = self.lo["views"] if kind == "v" else self.lo["photos"]
@@ -388,6 +414,14 @@ class LoadoutPage(ctk.CTkFrame):
             cands = [(("v", i), v["crop"]) for i, v in enumerate(self.lo["views"])]
         else:
             fx, fy = e.x / self.PW, e.y / self.PH
+            sub = self.lo["subtitles"]
+            if abs(fx - sub["x"]) < 0.25 and abs(fy - sub["y"]) < 0.06:
+                self.sel = ("s", 0)
+                self._refresh_layers()
+                self._load_controls()
+                self.drag = ("sub", fx - sub["x"], fy - sub["y"])
+                self._redraw()
+                return
             cands = [(("v", i), v["place"]) for i, v in enumerate(self.lo["views"])]
             cands += [(("p", j), p["place"]) for j, p in enumerate(self.lo["photos"])]
         hit = next((key for key, rect in reversed(cands) if _inside(rect, fx, fy)), None)
@@ -403,7 +437,14 @@ class LoadoutPage(ctk.CTkFrame):
         self._redraw()
 
     def _motion(self, e, where: str) -> None:
-        if not self.drag or self.drag[0] != where:
+        if not self.drag or self.drag[0] not in (where, "sub"):
+            return
+        if self.drag[0] == "sub":
+            sub = self.lo["subtitles"]
+            sub["x"] = _clamp(e.x / self.PW - self.drag[1])
+            sub["y"] = _clamp(e.y / self.PH - self.drag[2])
+            self._load_controls()
+            self._redraw()
             return
         layer = self._layer()
         if layer is None or (where == "frame" and self.sel[0] != "v"):
@@ -413,6 +454,73 @@ class LoadoutPage(ctk.CTkFrame):
         rect = layer["crop"] if where == "frame" else layer["place"]
         rect[0] = _clamp(fx - self.drag[1], 0.0, 1.0 - rect[2])
         rect[1] = _clamp(fy - self.drag[2], 0.0, 1.0 - rect[3])
+        self._load_controls()
+        self._redraw()
+
+    # ------------------------------------------------------------ klávesnice
+
+    def handle_key(self, e) -> bool:
+        """Šipky posouvají vybranou vrstvu (Shift = větší krok, Ctrl = výřez záběru),
+        +/- mění velikost, [ a ] přepínají vrstvy, Delete maže, Esc zpět. Vrací True, když klávesu použil."""
+        key = e.keysym
+        shift = bool(e.state & 0x1)
+        ctrl = bool(e.state & 0x4)
+        if key == "Escape":
+            self.app.show("create")
+            return True
+        if key in ("bracketleft", "bracketright"):
+            self._cycle(-1 if key == "bracketleft" else 1)
+            return True
+        if key in ("Delete", "BackSpace") and self.sel and self.sel[0] in ("v", "p"):
+            self._delete()
+            return True
+        if key in ("plus", "equal", "KP_Add", "minus", "KP_Subtract") and self.sel:
+            self._resize(1 if key in ("plus", "equal", "KP_Add") else -1)
+            return True
+        step = 0.05 if shift else 0.01
+        dx = {"Left": -step, "Right": step}.get(key, 0.0)
+        dy = {"Up": -step, "Down": step}.get(key, 0.0)
+        if (dx or dy) and self.sel:
+            self._nudge(dx, dy, ctrl)
+            return True
+        return False
+
+    def _cycle(self, step: int) -> None:
+        keys = [key for _, key in self._layers()]
+        if not keys:
+            return
+        idx = keys.index(self.sel) if self.sel in keys else -1
+        self.sel = keys[(idx + step) % len(keys)]
+        self._refresh_layers()
+        self._load_controls()
+        self._redraw()
+
+    def _nudge(self, dx: float, dy: float, crop: bool) -> None:
+        if self.sel[0] == "s":
+            sub = self.lo["subtitles"]
+            sub["x"] = _clamp(sub["x"] + dx)
+            sub["y"] = _clamp(sub["y"] + dy)
+        else:
+            layer = self._layer()
+            if layer is None:
+                return
+            rect = layer["crop"] if (crop and self.sel[0] == "v") else layer["place"]
+            rect[0] = _clamp(rect[0] + dx, 0.0, 1.0 - rect[2])
+            rect[1] = _clamp(rect[1] + dy, 0.0, 1.0 - rect[3])
+        self._load_controls()
+        self._redraw()
+
+    def _resize(self, sign: int) -> None:
+        if self.sel[0] == "s":
+            sub = self.lo["subtitles"]
+            sub["size"] = int(max(16, min(200, sub["size"] + sign * 4)))
+        else:
+            layer = self._layer()
+            if layer is None:
+                return
+            rect = layer["place"]
+            rect[2] = _clamp(rect[2] + sign * 0.02, 0.05, 1.0 - rect[0])
+            rect[3] = _clamp(rect[3] + sign * 0.02, 0.05, 1.0 - rect[1])
         self._load_controls()
         self._redraw()
 
@@ -486,6 +594,20 @@ class LoadoutPage(ctk.CTkFrame):
             x, y, w, h = p["place"]
             self._outline(cv, x * self.PW, y * self.PH, (x + w) * self.PW, (y + h) * self.PH,
                           PHOTO_COLOR, self.sel == ("p", j), f"F{j + 1}")
+        self._draw_subtitles(cv)
+
+    def _draw_subtitles(self, cv) -> None:
+        sub = self.lo["subtitles"]
+        size = max(8, int(round(sub["size"] * self.PW / 1080)))  # 1080 px je šířka výstupu
+        x, y = sub["x"] * self.PW, sub["y"] * self.PH
+        font = ("Segoe UI", -size, "bold")
+        for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+            cv.create_text(x + dx, y + dy, text=SUBTITLE_SAMPLE, fill="#000000", font=font)
+        cv.create_text(x, y, text=SUBTITLE_SAMPLE, fill="#FFFFFF", font=font)
+        if self.sel == ("s", 0):
+            half = len(SUBTITLE_SAMPLE) * size * 0.3
+            cv.create_rectangle(x - half, y - size * 0.7, x + half, y + size * 0.7,
+                                outline=ORANGE, width=2, dash=(3, 2))
 
     @staticmethod
     def _outline(cv, x0, y0, x1, y1, color, selected, label) -> None:
