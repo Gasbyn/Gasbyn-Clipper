@@ -101,6 +101,7 @@ def score_color(score: float) -> str:
 FORMAT_SHORT = "Short-form (9:16)"
 FORMAT_LONG = "Long-form"
 LANGUAGES = {"Čeština": "cs", "Slovenština": "sk", "Angličtina": "en"}
+LONG_CHOICES = ["5 min", "10 min", "15 min", "20 min", "30 min", "45 min", "60 min"]
 CATEGORY_NAMES = ["Gaming", "Vlog", "IRL", "Reakce", "Tutorial", "Podcast", "Sport", "Hudba", "Ostatní"]
 
 
@@ -282,7 +283,15 @@ class App(ctk.CTk):
             selected_color=ORANGE, selected_hover_color=ORANGE_LIGHT, unselected_color=INPUT,
             unselected_hover_color=BORDER, text_color=TEXT, font=fnt(12, True))
         self.format_seg.set(FORMAT_LONG if self.cfg["clips"]["format"] == "long" else FORMAT_SHORT)
-        self.format_seg.pack(side="left", padx=(10, 24))
+        self.format_seg.pack(side="left", padx=(10, 8))
+        self.long_var = ctk.StringVar(value=f"{int(self.cfg['clips'].get('long_minutes', 20))} min")
+        if self.long_var.get() not in LONG_CHOICES:
+            self.long_var.set("20 min")
+        self.long_menu = ctk.CTkOptionMenu(
+            prefs, variable=self.long_var, values=LONG_CHOICES, width=96, height=34, corner_radius=9,
+            fg_color=INPUT, button_color=BORDER, button_hover_color=BLOCK, dropdown_fg_color=PANEL,
+            text_color=TEXT, font=fnt(12))
+        self.long_menu.pack(side="left", padx=(0, 24))
         ctk.CTkLabel(prefs, text="Kategorie", font=fnt(12, True), text_color=MUTED).pack(side="left")
         self.category_var = ctk.StringVar(value=self.cfg["clips"].get("category", "Gaming"))
         ctk.CTkOptionMenu(prefs, variable=self.category_var, values=list(CATEGORY_NAMES), width=150,
@@ -303,11 +312,6 @@ class App(ctk.CTk):
         self.captions_var = ctk.BooleanVar(value=bool(self.cfg["captions"]["enabled"]))
         ctk.CTkSwitch(opts, text="Titulky", variable=self.captions_var, progress_color=ORANGE,
                       font=fnt(12), text_color=TEXT).pack(side="left")
-        self.reselect_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(opts, text="Znovu zavolat AI (ignorovat cache)",
-                        variable=self.reselect_var, fg_color=ORANGE, hover_color=ORANGE_LIGHT,
-                        border_color=BORDER, font=fnt(12), text_color=TEXT
-                        ).pack(side="left", padx=(28, 0))
         self.prep_btn = ctk.CTkButton(opts, text="Načíst video a nastavit loadout", height=30,
                                       corner_radius=8, fg_color=INPUT, hover_color=BORDER,
                                       text_color=ORANGE_LIGHT, font=fnt(11, True),
@@ -350,6 +354,7 @@ class App(ctk.CTk):
         """Typ, kategorie, jazyk a titulky z obrazovky Vytvořit klipy do konfigurace běhu."""
         cfg["clips"]["format"] = "long" if self.format_seg.get() == FORMAT_LONG else "short"
         cfg["clips"]["category"] = self.category_var.get()
+        cfg["clips"]["long_minutes"] = int(self.long_var.get().split()[0])
         cfg["transcription"]["language"] = LANGUAGES.get(self.lang_var.get(), "cs")
         cfg["captions"]["enabled"] = bool(self.captions_var.get())
 
@@ -368,7 +373,7 @@ class App(ctk.CTk):
             progress=lambda f, t: self.events.put(("progress", f, t)),
             cancel=self.cancel_event,
         )
-        kwargs = {"reselect": bool(self.reselect_var.get()),
+        kwargs = {"reselect": False,
                   "captions_override": bool(self.captions_var.get()),
                   "loadout": self.current_loadout}
         self.log_box.configure(state="normal")
@@ -649,8 +654,13 @@ class App(ctk.CTk):
                 frame = core.pick_best_frame(
                     video, probe["duration"], core.work_root(cfg) / "frames" / f"{vid}.png", cfg,
                     log=rep.log, use_ai=False)
-                lo = core.last_loadout(cfg) or core.default_loadout("short", probe["width"], probe["height"])
-                self.events.put(("prep_done", {"video_id": vid, "probe": probe, "frame": str(frame)}, lo))
+                lo = core.last_loadout(cfg)
+                if not lo:
+                    wide = probe["width"] / max(1, probe["height"]) > 1.2
+                    lo = core.preset_loadout("hra_webka" if wide else "stred",
+                                             probe["width"], probe["height"])
+                self.events.put(("prep_done", {"video_id": vid, "probe": probe, "frame": str(frame),
+                                               "video": str(video)}, lo))
             except Exception as exc:  # noqa: BLE001
                 self.events.put(("prep_error", str(exc)))
         threading.Thread(target=job, daemon=True).start()
@@ -841,9 +851,8 @@ class App(ctk.CTk):
         self.after(200, self._poll_extra)
 
     def connect_youtube(self) -> None:
-        raw = self.cfg["youtube"]["client_secret_file"]
-        secret = Path(raw) if raw else None
-        if not secret or not secret.exists():
+        secret = youtube.find_client_secret(DATA_ROOT, self.cfg["youtube"]["client_secret_file"])
+        if not secret:
             self.yt_status.configure(
                 text="Nejdřív vyber soubor client_secret a ulož nastavení.", text_color=RED)
             return

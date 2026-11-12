@@ -22,6 +22,16 @@ def token_path(root: Path) -> Path:
     return root / "youtube_token.json"
 
 
+def find_client_secret(root: Path, configured: str = "") -> Optional[Path]:
+    """Najde client_secret JSON: nejdřív to, co je v Nastavení, pak soubor ve složce aplikace
+    (client_secret*.json). Uživatel tak stačí jednou zkopírovat JSON do složky dat."""
+    if configured and Path(configured).exists():
+        return Path(configured)
+    root.mkdir(parents=True, exist_ok=True)
+    hits = sorted(root.glob("client_secret*.json")) or sorted(root.glob("*client_secret*.json"))
+    return hits[0] if hits else None
+
+
 def connect(client_secret: Path, root: Path) -> None:
     """Otevře prohlížeč, přihlásí účet a uloží token lokálně."""
     from google_auth_oauthlib.flow import InstalledAppFlow

@@ -605,13 +605,9 @@ class EditorPage(ctk.CTkFrame):
         if self.clip is None:
             return
         cfg = self.app.cfg["youtube"]
-        secret = Path(cfg["client_secret_file"]) if cfg["client_secret_file"] else None
-        if not secret or not secret.exists():
-            self._set_status("Nejdřív v Nastavení vyber soubor client_secret (YouTube).", RED)
-            return
-        creds = youtube.load_credentials(secret, DATA_ROOT)
-        if creds is None:
-            self._set_status("Účet YouTube není připojený. Připoj ho v Nastavení.", RED)
+        secret = youtube.find_client_secret(DATA_ROOT, cfg["client_secret_file"])
+        if not secret:
+            self._set_status("Chybí client_secret JSON. Zkopíruj ho do složky dat jako client_secret.json.", RED)
             return
         path = self.folder / self.file_name
         title = self.title_var.get().strip() or self.clip.get("title", "klip")
@@ -620,6 +616,11 @@ class EditorPage(ctk.CTkFrame):
         privacy = cfg["default_privacy"]
 
         def job(rep: Reporter) -> str:
+            creds = youtube.load_credentials(secret, DATA_ROOT)
+            if creds is None:
+                rep.log("Účet YouTube ještě není přihlášený, otevírám přihlášení v prohlížeči…")
+                youtube.connect(secret, DATA_ROOT)
+                creds = youtube.load_credentials(secret, DATA_ROOT)
             rep.log(f"Nahrávám na YouTube ({privacy})…")
             vid = youtube.upload(path, title, desc, tags, privacy, creds,
                                  progress=lambda p: rep.progress(p, "Nahrávám na YouTube"))

@@ -6,14 +6,20 @@ Loadouty se ukládají do knihovny a poslední použitý se nabídne u dalšího
 
 from __future__ import annotations
 
+import copy
+import os
+import subprocess
+import threading
+from pathlib import Path
+
 import tkinter as tk
 from tkinter import filedialog
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from core import (EFFECT_KINDS, LOADOUT_MAX_VIEWS, clean_loadout, clean_subtitles, list_loadouts,
-                  load_loadout, save_loadout)
+from core import (EFFECT_KINDS, LOADOUT_MAX_VIEWS, LOADOUT_PRESETS, clean_loadout, clean_subtitles,
+                  list_loadouts, load_loadout, preset_loadout, render_preview, save_loadout, work_root)
 
 BG = "#08090B"
 PANEL = "#121419"
@@ -90,6 +96,18 @@ class LoadoutPage(ctk.CTkFrame):
         ctk.CTkButton(btns, text="Použít pro toto video", height=36, corner_radius=9,
                       fg_color=ORANGE, hover_color=ORANGE_LIGHT, text_color="white",
                       font=_fnt(12, True), command=self._apply).pack(side="left", padx=(8, 0))
+
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(bar, text="Rozložení:", font=_fnt(12, True), text_color=MUTED).pack(side="left")
+        for key, label in LOADOUT_PRESETS.items():
+            ctk.CTkButton(bar, text=label, height=32, corner_radius=8, fg_color=INPUT,
+                          hover_color=BORDER, text_color=TEXT, font=_fnt(11, True),
+                          command=lambda k=key: self._preset(k)).pack(side="left", padx=(8, 0))
+        self.preview_btn = ctk.CTkButton(bar, text="▶ Náhled 5 s", height=32, corner_radius=8,
+                                         fg_color=ORANGE, hover_color=ORANGE_LIGHT, text_color="white",
+                                         font=_fnt(11, True), command=self._preview)
+        self.preview_btn.pack(side="right")
 
         self.note = ctk.CTkLabel(self, text="", font=_fnt(11), text_color=ORANGE_LIGHT, anchor="w")
         self.note.pack(fill="x", pady=(0, 8))
@@ -484,6 +502,56 @@ class LoadoutPage(ctk.CTkFrame):
             self._nudge(dx, dy, ctrl)
             return True
         return False
+
+    def _preset(self, key: str) -> None:
+        if not self.prep:
+            return
+        probe = self.prep["probe"]
+        lo = preset_loadout(key, probe["width"], probe["height"])
+        lo["photos"] = self.lo.get("photos", [])
+        lo["subtitles"] = self.lo["subtitles"]
+        self.lo = clean_loadout(lo)
+        self.sel = ("v", 0)
+        self._refresh_layers()
+        self._load_controls()
+        self._redraw()
+
+    def _preview(self) -> None:
+        if not self.prep or not self.prep.get("video"):
+            self.note.configure(text="Nejdřív načti video.")
+            return
+        cfg = copy.deepcopy(self.app.cfg)
+        self.app.apply_create_opts(cfg)
+        probe = self.prep["probe"]
+        lo = clean_loadout(self.lo)
+        self.preview_btn.configure(state="disabled", text="Renderuji náhled…")
+        self._pv = None
+
+        def job() -> None:
+            try:
+                out = render_preview(Path(self.prep["video"]), lo, cfg, probe["width"], probe["height"],
+                                     work_root(cfg) / "preview", at=probe["duration"] * 0.4)
+                self._pv = (out, None)
+            except Exception as exc:  # noqa: BLE001
+                self._pv = (None, str(exc))
+        thread = threading.Thread(target=job, daemon=True)
+        thread.start()
+        self._poll_preview(thread)
+
+    def _poll_preview(self, thread: threading.Thread) -> None:
+        if thread.is_alive():
+            self.after(150, lambda: self._poll_preview(thread))
+            return
+        self.preview_btn.configure(state="normal", text="▶ Náhled 5 s")
+        out, err = self._pv or (None, "Náhled se nepovedl.")
+        if err:
+            self.note.configure(text=err[:300])
+            return
+        self.note.configure(text="Náhled je otevřený v přehrávači.")
+        try:
+            os.startfile(str(out))  # Windows
+        except AttributeError:
+            subprocess.Popen(["xdg-open", str(out)])
 
     def _cycle(self, step: int) -> None:
         keys = [key for _, key in self._layers()]

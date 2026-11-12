@@ -56,7 +56,7 @@ SECTIONS: list[tuple[str, str, list[F]]] = [
           "short = vertikální klipy 9:16 do 60 s (podle loadoutu). long = delší klipy 16:9 od 60 s, "
           "délku nastavíš níže.", options=["short", "long"]),
         F("max_seconds", 60, "int", "Nejdelší short-form klip (s)",
-          "Platí jen pro short-form. Shorts a Reels mají limit 60 s.", min=20, max=60),
+          "Platí jen pro short-form. Shorts a Reels mají limit 60 s.", min=15, max=60),
         F("long_minutes", 15, "int", "Délka long-form klipu (min)",
           "Platí jen pro long-form. Nejdelší klip, který AI smí vybrat. Nejkratší je 1 minuta.",
           min=1, max=60),
@@ -66,7 +66,10 @@ SECTIONS: list[tuple[str, str, list[F]]] = [
         F("min_score", 0, "int", "Minimální hodnocení (nepoužívá se)",
           "Skóre je informativní odhad potenciálu views. Žádný moment se kvůli nízkému skóre automaticky nevyřadí.",
           min=0, max=100),
-        F("min_seconds", 20, "int", "Nejkratší klip (s)", "Interní hodnota.", min=5, max=180, show=False),
+        F("min_seconds", 20, "int", "Nejkratší short-form klip (s)",
+          "Kratší momenty AI nevybere.", min=10, max=59),
+        F("preferred_seconds", 35, "int", "Preferovaná délka short-form (s)",
+          "Klipy kolem této délky dostanou při výběru přednost.", min=10, max=60),
         F("max_overlap_percent", 25, "int", "Povolené překrytí klipů (%)", "Interní hodnota.",
           min=0, max=100, show=False),
     ]),
@@ -224,7 +227,7 @@ SECTIONS: list[tuple[str, str, list[F]]] = [
 
 # Co se nastavuje automaticky (na záložce Vytvořit klipy nebo podle VODu) - v Nastavení se neukazuje.
 AUTO_KEYS = {
-    ("clips", "format"), ("clips", "category"), ("clips", "long_minutes"), ("clips", "max_seconds"),
+    ("clips", "format"), ("clips", "category"), ("clips", "long_minutes"),
     ("clips", "count_per_hour"), ("clips", "min_score"),
     ("transcription", "language"),
     ("captions", "enabled"), ("captions", "font_size"), ("captions", "position"),

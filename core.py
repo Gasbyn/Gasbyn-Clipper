@@ -166,10 +166,12 @@ def apply_profile(cfg: dict) -> dict:
     if c["format"] == "long":
         c["min_seconds"] = 60
         c["max_seconds"] = int(c["long_minutes"]) * 60
+        c["preferred_seconds"] = c["max_seconds"]
         weights = FORMAT_WEIGHTS["long"]
     else:
-        c["min_seconds"] = 20
-        c["max_seconds"] = min(60, int(c["max_seconds"]))
+        c["max_seconds"] = max(10, min(60, int(c["max_seconds"])))
+        c["min_seconds"] = max(5, min(int(c["min_seconds"]), c["max_seconds"] - 5))
+        c["preferred_seconds"] = max(c["min_seconds"], min(c["max_seconds"], int(c["preferred_seconds"])))
         weights = FORMAT_WEIGHTS["short"]
     for key, val in weights.items():
         out["scoring"][f"weight_{key}"] = val
@@ -341,7 +343,9 @@ def get_source(source: str, cfg: dict, rep: Reporter) -> tuple[Path, str, bool]:
     height = int(d["max_height"])
 
     base_opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
-                 "retries": int(d["retries"])}
+                 "retries": int(d["retries"]),
+                 "concurrent_fragment_downloads": 6,  # HLS/DASH fragmenty naráz = rychlejší stažení
+                 "fragment_retries": 10, "socket_timeout": 30}
     if d["cookies_file"]:
         base_opts["cookiefile"] = d["cookies_file"]
 
@@ -741,7 +745,9 @@ def select_clips(candidates: list[dict], cfg: dict, duration: float,
         if length < min_len or length > max_len or cand["start"] < 0 or cand["end"] > duration + 1:
             continue
         item = dict(cand)
-        item["score"] = final_score(cand, cfg)
+        pref = float(c.get("preferred_seconds") or max_len)
+        closeness = max(0.0, 1.0 - abs(length - pref) / max(pref, 1.0))
+        item["score"] = round(clamp(final_score(cand, cfg) + 6.0 * closeness), 1)
         pool.append(item)
     pool.sort(key=lambda x: x["score"], reverse=True)
 
@@ -1011,6 +1017,85 @@ def clean_subtitles(s: Optional[dict]) -> dict:
                 "size": int(max(16, min(200, float(s.get("size", SUBTITLE_DEFAULT["size"])))))}
     except (TypeError, ValueError):
         return dict(SUBTITLE_DEFAULT)
+
+
+def crop_for_aspect(aspect: float, src_w: int, src_h: int, cx: float = 0.5, cy: float = 0.5,
+                    width_frac: Optional[float] = None) -> list[float]:
+    """Výřez zdroje (podíly) s daným poměrem stran (šířka/výška), střed v (cx, cy).
+    Bez width_frac bere co nejvyšší možný výřez."""
+    cw = width_frac if width_frac is not None else min(1.0, aspect * src_h / src_w)
+    ch = cw * src_w / (aspect * src_h)
+    if ch > 1.0:
+        ch = 1.0
+        cw = aspect * src_h / src_w
+    x = min(1.0 - cw, max(0.0, cx - cw / 2))
+    y = min(1.0 - ch, max(0.0, cy - ch / 2))
+    return [round(x, 4), round(y, 4), round(cw, 4), round(ch, 4)]
+
+
+LOADOUT_PRESETS = {
+    "stred": "Celý střed",
+    "hra_webka": "Hra nahoře + webka dole",
+    "webka_hra": "Webka nahoře + hra dole",
+    "jen_hra": "Jen hra",
+}
+
+
+def preset_loadout(name: str, src_w: int, src_h: int, effects: Optional[dict] = None) -> dict:
+    """Doporučená rozložení pro 9:16. Výřez webky je odhad (pravý dolní roh) - lze ho tažením upravit."""
+    base = default_loadout("short", src_w, src_h, effects)
+    if name == "stred":
+        return base
+    game_box = [0.0, 0.0, 1.0, 0.62]
+    cam_box = [0.0, 0.64, 1.0, 0.36]
+    game_aspect = (game_box[2] * 1080) / (game_box[3] * 1920)
+    cam_aspect = (cam_box[2] * 1080) / (cam_box[3] * 1920)
+    game_crop = crop_for_aspect(game_aspect, src_w, src_h)
+    cam_crop = crop_for_aspect(cam_aspect, src_w, src_h, cx=0.85, cy=0.82, width_frac=0.3)
+    if name == "jen_hra":
+        base["views"][0]["crop"] = crop_for_aspect(9 / 16, src_w, src_h)
+        return base
+    if name == "hra_webka":
+        game = {"crop": game_crop, "place": game_box, "anim": "none", "anim_seconds": 0.6}
+        cam = {"crop": cam_crop, "place": cam_box, "anim": "none", "anim_seconds": 0.6}
+    else:  # webka_hra
+        cam = {"crop": cam_crop, "place": [0.0, 0.0, 1.0, 0.36], "anim": "none", "anim_seconds": 0.6}
+        game = {"crop": game_crop, "place": [0.0, 0.36, 1.0, 0.64], "anim": "none", "anim_seconds": 0.6}
+    base["views"] = [game, cam]
+    base["name"] = LOADOUT_PRESETS[name]
+    return base
+
+
+def render_preview(video: Path, lo: dict, cfg: dict, src_w: int, src_h: int, out_dir: Path,
+                   at: float, items: Optional[list] = None, seconds: float = 5.0) -> Path:
+    """Krátký náhled loadoutu: 5 s, 720p, 30 fps, s animacemi a titulky."""
+    W, H, fps = 720, 1280, 30
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lo = clean_loadout(lo)
+    photos = [p for p in lo["photos"] if Path(p["path"]).exists()]
+    cap = cfg["captions"]
+    subs = None
+    if cap["enabled"]:
+        sample = items or [(0.0, seconds, "Ukázka titulků z klipu")]
+        sub = dict(clean_subtitles(lo.get("subtitles")))
+        sub["size"] = max(10, int(round(sub["size"] * H / 1920)))
+        ass = out_dir / "preview.ass"
+        write_ass(ass, [(a, min(b, seconds), t) for a, b, t in sample if a < seconds], cap, sub, W, H)
+        subs = ass.name
+    graph = loadout_graph(lo, W, H, int(src_w), int(src_h), seconds, photos, subs)
+    out_file = out_dir / "preview.mp4"
+    cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{max(0.0, at):.3f}",
+           "-i", str(video)]
+    for p in photos:
+        cmd += ["-loop", "1", "-i", str(p["path"])]
+    cmd += ["-t", f"{seconds:.3f}", "-filter_complex", graph, "-map", "[vout]", "-map", "0:a?",
+            "-r", str(fps), "-fps_mode", "cfr", "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out_file.name]
+    proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
+    if proc.returncode != 0 or not out_file.exists():
+        raise RuntimeError(f"Náhled se nepovedl: {_ffmpeg_error(proc)}")
+    return out_file
 
 
 def default_loadout(fmt: str, src_w: int, src_h: int, effects: Optional[dict] = None) -> dict:
