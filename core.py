@@ -1207,6 +1207,16 @@ def loadout_graph(lo: dict, W: int, H: int, src_w: int, src_h: int, duration: fl
     bg = str(lo.get("background", "#000000")).lstrip("#")
     parts.append(f"color=c=0x{bg}:s={W}x{H}:d={duration:.3f}[base0]")
     cur = "base0"
+    n_views = min(len(lo["views"]), LOADOUT_MAX_VIEWS)
+    if n_views:
+        # Zdroj může v půlce VODu změnit rozlišení (např. 1080p -> 480p). Každý snímek proto
+        # přepočítám na pevné rozlišení z probe, jinak crop při změně selže ("Error reinitializing filters").
+        norm = (f"[0:v]scale={src_w}:{src_h}:force_original_aspect_ratio=decrease,"
+                f"pad={src_w}:{src_h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,setpts=PTS-STARTPTS")
+        if n_views == 1:
+            parts.append(f"{norm}[srcv0]")
+        else:
+            parts.append(norm + "," + f"split={n_views}" + "".join(f"[srcv{i}]" for i in range(n_views)))
     for i, v in enumerate(lo["views"][:LOADOUT_MAX_VIEWS]):
         cx, cy, cw, ch = v["crop"]
         cw_px = min(src_w, _even(cw * src_w))
@@ -1216,7 +1226,7 @@ def loadout_graph(lo: dict, W: int, H: int, src_w: int, src_h: int, duration: fl
         bx, by, bw, bh = v["place"]
         pw, ph = _even(bw * W), _even(bh * H)
         px, py = int(round(bx * W)), int(round(by * H))
-        parts.append(f"[0:v]setpts=PTS-STARTPTS,crop={cw_px}:{ch_px}:{x_px}:{y_px},"
+        parts.append(f"[srcv{i}]crop={cw_px}:{ch_px}:{x_px}:{y_px},"
                      f"scale={pw}:{ph}:force_original_aspect_ratio=increase,crop={pw}:{ph},"
                      f"setsar=1,format=yuva420p[v{i}raw]")
         parts.append(_anim_chain(f"v{i}raw", f"v{i}", v.get("anim", "none"),
@@ -1309,12 +1319,14 @@ def _available_encoders() -> set[str]:
 
 def _plain_video_filter(fmt: str, src_w: int, src_h: int, W: int, H: int) -> str:
     if fmt == "short":
+        # nejdřív pevné rozlišení (zdroj může v půlce změnit velikost), pak střih na 9:16
+        norm = f"scale={src_w}:{src_h}:force_original_aspect_ratio=decrease,pad={src_w}:{src_h}:(ow-iw)/2:(oh-ih)/2:black,"
         ratio = W / H
         if src_w / src_h > ratio:
             cw = _even(src_h * ratio)
-            return f"crop={cw}:{_even(src_h)}:{max(0, (src_w-cw)//2)}:0,scale={W}:{H},setsar=1"
+            return norm + f"crop={cw}:{_even(src_h)}:{max(0, (src_w-cw)//2)}:0,scale={W}:{H},setsar=1"
         ch = _even(src_w / ratio)
-        return f"crop={_even(src_w)}:{ch}:0:{max(0, (src_h-ch)//2)},scale={W}:{H},setsar=1"
+        return norm + f"crop={_even(src_w)}:{ch}:0:{max(0, (src_h-ch)//2)},scale={W}:{H},setsar=1"
     return f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1"
 
 
