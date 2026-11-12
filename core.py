@@ -996,7 +996,7 @@ def auto_output(cfg: dict, probe: dict) -> dict:
     fps = 60 if probe.get("fps", 30) >= 50 else 30
     kbps = probe.get("kbps") or 0
     spec = {"width": w, "height": h, "fps": fps,
-            "crf": 21 if kbps >= 5000 else 23, "preset": "veryfast", "audio_bitrate": "160k"}
+            "crf": 18 if kbps >= 5000 else 20, "preset": "medium", "audio_bitrate": "192k"}
     o.update(spec)
     return spec
 
@@ -1067,9 +1067,10 @@ def preset_loadout(name: str, src_w: int, src_h: int, effects: Optional[dict] = 
 
 
 def render_preview(video: Path, lo: dict, cfg: dict, src_w: int, src_h: int, out_dir: Path,
-                   at: float, items: Optional[list] = None, seconds: float = 5.0) -> Path:
+                   at: float, items: Optional[list] = None, seconds: float = 5.0,
+                   width: int = 720, height: int = 1280) -> Path:
     """Krátký náhled loadoutu: 5 s, 720p, 30 fps, s animacemi a titulky."""
-    W, H, fps = 720, 1280, 30
+    W, H, fps = width, height, 30
     out_dir.mkdir(parents=True, exist_ok=True)
     lo = clean_loadout(lo)
     photos = [p for p in lo["photos"] if Path(p["path"]).exists()]
@@ -1085,7 +1086,7 @@ def render_preview(video: Path, lo: dict, cfg: dict, src_w: int, src_h: int, out
     graph = loadout_graph(lo, W, H, int(src_w), int(src_h), seconds, photos, subs)
     out_file = out_dir / "preview.mp4"
     cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{max(0.0, at):.3f}",
-           "-i", str(video)]
+           "-reinit_filter", "0", "-i", str(video)]
     for p in photos:
         cmd += ["-loop", "1", "-i", str(p["path"])]
     cmd += ["-t", f"{seconds:.3f}", "-filter_complex", graph, "-map", "[vout]", "-map", "0:a?",
@@ -1189,8 +1190,10 @@ def _anim_chain(src: str, out: str, kind: str, d: float, w: int, h: int, tag: st
         return f"[{src}]fade=t=in:st=0:d={d}[{out}]"
     if kind == "unblur":
         a, b, c = f"{tag}a", f"{tag}b", f"{tag}c"
+        # boxblur přijímá poloměr jen do 12 (u chroma) a nesmí být větší než rozměr plochy
+        radius = max(1, min(12, min(w, h) // 8))
         return (f"[{src}]split[{a}][{b}];"
-                f"[{b}]boxblur=20:2,format=rgba,fade=t=out:st=0:d={d}:alpha=1[{c}];"
+                f"[{b}]boxblur={radius}:2:{radius}:2,format=rgba,fade=t=out:st=0:d={d}:alpha=1[{c}];"
                 f"[{a}][{c}]overlay[{out}]")
     if kind == "shake":
         amp = max(2, int(w * 0.02))
@@ -1227,7 +1230,7 @@ def loadout_graph(lo: dict, W: int, H: int, src_w: int, src_h: int, duration: fl
         pw, ph = _even(bw * W), _even(bh * H)
         px, py = int(round(bx * W)), int(round(by * H))
         parts.append(f"[srcv{i}]crop={cw_px}:{ch_px}:{x_px}:{y_px},"
-                     f"scale={pw}:{ph}:force_original_aspect_ratio=increase,crop={pw}:{ph},"
+                     f"scale={pw}:{ph}:force_original_aspect_ratio=increase:flags=lanczos,crop={pw}:{ph},"
                      f"setsar=1,format=yuva420p[v{i}raw]")
         parts.append(_anim_chain(f"v{i}raw", f"v{i}", v.get("anim", "none"),
                                  v.get("anim_seconds", 0.6), pw, ph, f"tv{i}"))
@@ -1240,7 +1243,7 @@ def loadout_graph(lo: dict, W: int, H: int, src_w: int, src_h: int, duration: fl
         px, py = int(round(bx * W)), int(round(by * H))
         start = float(p.get("start", 0))
         end = float(p.get("end", 0)) or duration
-        parts.append(f"[{j + 1}:v]scale={pw}:{ph}:force_original_aspect_ratio=decrease,"
+        parts.append(f"[{j + 1}:v]scale={pw}:{ph}:force_original_aspect_ratio=decrease:flags=lanczos,"
                      f"format=yuva420p,setpts=PTS-STARTPTS[p{j}raw]")
         parts.append(_anim_chain(f"p{j}raw", f"p{j}", p.get("anim", "none"),
                                  p.get("anim_seconds", 0.6), pw, ph, f"tp{j}"))
@@ -1248,10 +1251,11 @@ def loadout_graph(lo: dict, W: int, H: int, src_w: int, src_h: int, duration: fl
         parts.append(f"[{cur}][p{j}]overlay=x='{px}+({pw}-w)/2':y='{py}+({ph}-h)/2'"
                      f":enable='between(t,{start:.2f},{end:.2f})':eof_action=pass:shortest=1[{nxt}]")
         cur = nxt
+    # jemné doostření: 9:16 výřez z 1080p se zvětšuje, bez něj vypadá měkce
     if subs:
-        parts.append(f"[{cur}]subtitles={subs},format=yuv420p[vout]")
+        parts.append(f"[{cur}]unsharp=5:5:0.6:5:5:0.0,subtitles={subs},format=yuv420p[vout]")
     else:
-        parts.append(f"[{cur}]format=yuv420p[vout]")
+        parts.append(f"[{cur}]unsharp=5:5:0.6:5:5:0.0,format=yuv420p[vout]")
     return ";".join(parts)
 
 
@@ -1299,8 +1303,8 @@ def _ffmpeg_error(proc: subprocess.CompletedProcess) -> str:
 
 def _encoder_args(encoder: str, spec: dict) -> list[str]:
     if encoder == "h264_nvenc":
-        return ["-c:v", encoder, "-preset", "p4", "-tune", "hq",
-                "-rc", "vbr", "-cq", str(max(18, min(28, int(spec["crf"])))),
+        return ["-c:v", encoder, "-preset", "p5", "-tune", "hq",
+                "-rc", "vbr", "-cq", str(max(16, min(26, int(spec["crf"])))),
                 "-b:v", "0", "-pix_fmt", "yuv420p"]
     return ["-c:v", "libx264", "-preset", str(spec["preset"]),
             "-crf", str(int(spec["crf"])), "-pix_fmt", "yuv420p"]
@@ -1324,10 +1328,10 @@ def _plain_video_filter(fmt: str, src_w: int, src_h: int, W: int, H: int) -> str
         ratio = W / H
         if src_w / src_h > ratio:
             cw = _even(src_h * ratio)
-            return norm + f"crop={cw}:{_even(src_h)}:{max(0, (src_w-cw)//2)}:0,scale={W}:{H},setsar=1"
+            return norm + f"crop={cw}:{_even(src_h)}:{max(0, (src_w-cw)//2)}:0,scale={W}:{H}:flags=lanczos,unsharp=5:5:0.6:5:5:0.0,setsar=1"
         ch = _even(src_w / ratio)
-        return norm + f"crop={_even(src_w)}:{ch}:0:{max(0, (src_h-ch)//2)},scale={W}:{H},setsar=1"
-    return f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+        return norm + f"crop={_even(src_w)}:{ch}:0:{max(0, (src_h-ch)//2)},scale={W}:{H}:flags=lanczos,unsharp=5:5:0.6:5:5:0.0,setsar=1"
+    return f"scale={W}:{H}:force_original_aspect_ratio=decrease:flags=lanczos,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1"
 
 
 def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
@@ -1372,31 +1376,44 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
     out_file = out_dir / f"{name}.mp4"
     start = f"{float(clip['start']):.3f}"
     encoders = [e for e in ("libx264", "h264_nvenc") if e in _available_encoders()] or ["libx264"]
-    errors = []
-    success = False
-    for encoder in encoders:
-        cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", start, "-i", str(video)]
-        for p in photos:
-            cmd += ["-loop", "1", "-i", str(p["path"])]
-        cmd += ["-t", f"{duration:.3f}", "-filter_complex_threads", "1", "-filter_complex", graph, "-map", "[vout]", "-map", "0:a?",
-                "-r", str(int(spec["fps"])), "-fps_mode", "cfr"]
-        cmd += _encoder_args(encoder, spec)
-        cmd += ["-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart", out_file.name]
-        rep.check()
-        out_file.unlink(missing_ok=True)
-        rep.log(f"Exportuji plný klip ({encoder})…")
-        proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace")
-        if proc.returncode == 0 and out_file.exists() and out_file.stat().st_size > 1024:
-            success = True
-            break
-        out_file.unlink(missing_ok=True)
-        errors.append(f"{encoder}: {_ffmpeg_error(proc)}")
+    errors: list[str] = []
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+
+    def run_full(graph_str: str, label: str) -> bool:
+        for encoder in encoders:
+            cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", start,
+                   "-reinit_filter", "0", "-i", str(video)]
+            for p in photos:
+                cmd += ["-loop", "1", "-i", str(p["path"])]
+            cmd += ["-t", f"{duration:.3f}", "-filter_complex_threads", "1", "-filter_complex", graph_str,
+                    "-map", "[vout]", "-map", "0:a?", "-r", str(int(spec["fps"])), "-fps_mode", "cfr"]
+            cmd += _encoder_args(encoder, spec)
+            cmd += ["-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart", out_file.name]
+            rep.check()
+            out_file.unlink(missing_ok=True)
+            rep.log(f"Exportuji plný klip ({encoder}{', ' + label if label else ''})…")
+            proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace")
+            if proc.returncode == 0 and out_file.exists() and out_file.stat().st_size > 1024:
+                return True
+            out_file.unlink(missing_ok=True)
+            errors.append(f"{encoder}{' ' + label if label else ''}: {_ffmpeg_error(proc)}")
+        return False
+
+    success = run_full(graph, "")
+    if not success and any(v.get("anim", "none") != "none" for v in lo["views"]):
+        # animace jsou nejčastější příčina chyby ve filtrech; zkusíme loadout bez nich
+        rep.log("Export s animacemi selhal, zkouším loadout bez animací.")
+        lo_plain = copy.deepcopy(lo)
+        for v in lo_plain["views"]:
+            v["anim"] = "none"
+        graph_plain = loadout_graph(lo_plain, W, H, int(src_w), int(src_h), duration, photos, subs)
+        success = run_full(graph_plain, "bez animací")
     if not success:
         rep.log("Plný export selhal. Zkouším nouzový střih bez loadoutu, titulků a efektů.")
         for encoder in encoders:
             cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", start,
-                   "-i", str(video), "-t", f"{duration:.3f}", "-vf",
+                   "-reinit_filter", "0", "-i", str(video), "-t", f"{duration:.3f}", "-vf",
                    _plain_video_filter(fmt, int(src_w), int(src_h), W, H),
                    "-map", "0:v:0", "-map", "0:a?", "-r", str(int(spec["fps"])), "-fps_mode", "cfr"]
             cmd += _encoder_args(encoder, spec)

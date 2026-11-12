@@ -10,7 +10,7 @@ from schema import default_settings
 class PipelineTests(unittest.TestCase):
     def test_vertical_fallback_filter_for_1080p_source(self):
         result = _plain_video_filter("short", 1920, 1080, 1080, 1920)
-        self.assertEqual(result, "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,crop=608:1080:656:0,scale=1080:1920,setsar=1")
+        self.assertEqual(result, "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,crop=608:1080:656:0,scale=1080:1920:flags=lanczos,unsharp=5:5:0.6:5:5:0.0,setsar=1")
 
     def test_zero_view_potential_is_not_replaced_with_fifty(self):
         cfg = default_settings()
