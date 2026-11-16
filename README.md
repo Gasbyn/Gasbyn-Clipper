@@ -99,7 +99,7 @@ Na stránce **Hotové klipy** klikni na **Upravit**. Editor obsahuje:
 - **Fotka**: vlož obrázek (PNG, JPG, WebP), nastav polohu X a Y, velikost a v jakém čase se má zobrazovat (od–do, 0 = do konce klipu).
 - **Uložit a přerenderovat**: vytvoří klip znovu se změnami. Když zdrojové video zmizelo z cache, stáhne se znovu.
 
-Editor je jednodušší než CapCut. Náhled se přehraje v systémovém přehrávači (ne uvnitř aplikace), klip jde jen zkrátit a animace se dají dát jen na začátek.
+Editor je jednodušší než CapCut. Náhled se přehraje v systémovém přehrávači (ne uvnitř aplikace), klip jde jen zkrátit, ne prodloužit nad původní okno, a animace se dají dát jen na začátek.
 
 ## Nahrání na YouTube
 
