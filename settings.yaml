@@ -76,6 +76,8 @@ output:
   write_txt: true
   # Po skončení se otevře složka s klipy v Průzkumníku.
   open_folder_after: true
+  # Jen při selhání plného exportu smí vytvořit klip bez loadoutu, fotek a titulků.
+  allow_degraded_fallback: false
 
 # ===== Cache a úklid =====
 cache:
