@@ -534,7 +534,8 @@ class LoadoutPage(ctk.CTkFrame):
         def job() -> None:
             try:
                 out = render_preview(Path(self.prep["video"]), lo, cfg, probe["width"], probe["height"],
-                                     work_root(cfg) / "preview", at=probe["duration"] * 0.4)
+                                     work_root(cfg) / "preview",
+                                     at=float(self.prep.get("preview_at", probe["duration"] * 0.4)))
                 self._pv = (out, None)
             except Exception as exc:  # noqa: BLE001
                 self._pv = (None, str(exc))
