@@ -275,7 +275,7 @@ class EditorPage(ctk.CTkFrame):
                                     default_loadout("short", probe["width"], probe["height"]))
             return {
                 "prep": {"video_id": video_id, "probe": probe, "frame": str(frame),
-                         "video": str(video)},
+                         "video": str(video), "preview_at": at},
                 "loadout": loadout,
             }
 
