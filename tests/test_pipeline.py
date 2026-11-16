@@ -57,6 +57,32 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(ask_llm(cfg, "system", "user", rep), '{"ok": true}')
         self.assertEqual(call.call_count, 2)
 
+    def test_render_does_not_silently_discard_loadout_on_failure(self):
+        import tempfile
+        from pathlib import Path
+        import core
+
+        cfg = default_settings()
+        cfg["captions"]["enabled"] = False
+        cfg["output"]["write_txt"] = False
+        clip = {
+            "start": 0.0, "end": 5.0, "src_size": [1920, 1080],
+            "format": "short", "score": 50, "title": "test",
+            "loadout": core.default_loadout("short", 1920, 1080),
+        }
+        failed = requests.Response()
+        failed.status_code = 1
+        proc = mock.Mock(returncode=1, stderr="synthetic ffmpeg failure", stdout="")
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch("core._available_encoders", return_value={"libx264"}), \
+             mock.patch("core.subprocess.run", return_value=proc) as run:
+            with self.assertRaisesRegex(RuntimeError, "zachováním všech nastavených vrstev"):
+                core.render_clip(Path("source.mp4"), [], clip, Path(tmp), cfg, 1,
+                                 Reporter(log=lambda _message: None))
+            self.assertEqual(run.call_count, 1)
+            self.assertIn("-filter_complex", run.call_args.args[0])
+
 
 if __name__ == "__main__":
     unittest.main()
