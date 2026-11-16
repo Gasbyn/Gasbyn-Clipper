@@ -10,6 +10,7 @@ import base64
 import copy
 import json
 import hashlib
+import math
 import os
 import re
 import shutil
@@ -1122,20 +1123,78 @@ def default_loadout(fmt: str, src_w: int, src_h: int, effects: Optional[dict] = 
             "subtitles": dict(SUBTITLE_DEFAULT)}
 
 
+def _clean_rect(value, default: list[float]) -> list[float]:
+    """Validuje normalizovaný obdélník [x, y, width, height] v rozsahu 0..1."""
+    try:
+        if not isinstance(value, (list, tuple)) or len(value) != 4:
+            return list(default)
+        x, y, w, h = (float(v) for v in value)
+        if not all(math.isfinite(v) for v in (x, y, w, h)):
+            return list(default)
+    except (TypeError, ValueError, OverflowError):
+        return list(default)
+    w = max(0.02, min(1.0, w))
+    h = max(0.02, min(1.0, h))
+    x = max(0.0, min(1.0 - w, x))
+    y = max(0.0, min(1.0 - h, y))
+    return [round(x, 6), round(y, 6), round(w, 6), round(h, 6)]
+
+
+def _clean_seconds(value, default: float = 0.6) -> float:
+    try:
+        value = float(value)
+        if not math.isfinite(value):
+            return default
+        return max(0.1, min(3.0, value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def clean_loadout(lo: dict) -> dict:
-    """Ořízne seznamy na povolené délky a doplní chybějící pole."""
-    out = {"name": str(lo.get("name", "loadout")), "background": lo.get("background", "#000000"),
-           "views": [], "photos": []}
-    for v in lo.get("views", [])[:LOADOUT_MAX_VIEWS]:
-        out["views"].append({"crop": [float(x) for x in v["crop"]],
-                             "place": [float(x) for x in v["place"]],
-                             "anim": v.get("anim", "none") if v.get("anim") in EFFECT_KINDS else "none",
-                             "anim_seconds": float(v.get("anim_seconds", 0.6))})
-    for p in lo.get("photos", []):
-        out["photos"].append({"path": str(p["path"]), "place": [float(x) for x in p["place"]],
-                              "anim": p.get("anim", "none") if p.get("anim") in EFFECT_KINDS else "none",
-                              "anim_seconds": float(p.get("anim_seconds", 0.6)),
-                              "start": float(p.get("start", 0)), "end": float(p.get("end", 0))})
+    """Normalizuje a validuje loadout; zachová všechny platné vrstvy a opraví chybné souřadnice."""
+    if not isinstance(lo, dict):
+        lo = {}
+    name = str(lo.get("name", "loadout")).strip()[:80] or "loadout"
+    background = str(lo.get("background", "#000000"))
+    if not re.fullmatch(r"#?[0-9a-fA-F]{6}", background):
+        background = "#000000"
+    elif not background.startswith("#"):
+        background = "#" + background
+    out = {"name": name, "background": background, "views": [], "photos": []}
+    views = lo.get("views", [])
+    if not isinstance(views, list):
+        views = []
+    for v in views[:LOADOUT_MAX_VIEWS]:
+        if not isinstance(v, dict):
+            continue
+        anim = v.get("anim", "none")
+        out["views"].append({
+            "crop": _clean_rect(v.get("crop"), [0.0, 0.0, 1.0, 1.0]),
+            "place": _clean_rect(v.get("place"), [0.0, 0.0, 1.0, 1.0]),
+            "anim": anim if anim in EFFECT_KINDS else "none",
+            "anim_seconds": _clean_seconds(v.get("anim_seconds", 0.6)),
+        })
+    photos = lo.get("photos", [])
+    if not isinstance(photos, list):
+        photos = []
+    for p in photos:
+        if not isinstance(p, dict) or not p.get("path"):
+            continue
+        anim = p.get("anim", "none")
+        try:
+            start = float(p.get("start", 0))
+            end = float(p.get("end", 0))
+            if not math.isfinite(start) or not math.isfinite(end):
+                start, end = 0.0, 0.0
+        except (TypeError, ValueError, OverflowError):
+            start, end = 0.0, 0.0
+        out["photos"].append({
+            "path": str(p["path"]),
+            "place": _clean_rect(p.get("place"), [0.0, 0.0, 0.25, 0.25]),
+            "anim": anim if anim in EFFECT_KINDS else "none",
+            "anim_seconds": _clean_seconds(p.get("anim_seconds", 0.6)),
+            "start": max(0.0, start), "end": max(0.0, end),
+        })
     out["subtitles"] = clean_subtitles(lo.get("subtitles"))
     return out
 
@@ -1211,6 +1270,8 @@ def loadout_graph(lo: dict, W: int, H: int, src_w: int, src_h: int, duration: fl
     parts.append(f"color=c=0x{bg}:s={W}x{H}:d={duration:.3f}[base0]")
     cur = "base0"
     n_views = min(len(lo["views"]), LOADOUT_MAX_VIEWS)
+    if n_views < 1:
+        raise ValueError("Loadout neobsahuje žádný video záběr. Přidej alespoň jednu vrstvu videa.")
     if n_views:
         # Zdroj může v půlce VODu změnit rozlišení (např. 1080p -> 480p). Každý snímek proto
         # přepočítám na pevné rozlišení z probe, jinak crop při změně selže ("Error reinitializing filters").
@@ -1375,7 +1436,7 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
     graph = loadout_graph(lo, W, H, int(src_w), int(src_h), duration, photos, subs)
     out_file = out_dir / f"{name}.mp4"
     start = f"{float(clip['start']):.3f}"
-    encoders = [e for e in ("libx264", "h264_nvenc") if e in _available_encoders()] or ["libx264"]
+    encoders = [e for e in ("h264_nvenc", "libx264") if e in _available_encoders()] or ["libx264"]
     errors: list[str] = []
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1401,16 +1462,23 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
         return False
 
     success = run_full(graph, "")
-    if not success and any(v.get("anim", "none") != "none" for v in lo["views"]):
-        # animace jsou nejčastější příčina chyby ve filtrech; zkusíme loadout bez nich
-        rep.log("Export s animacemi selhal, zkouším loadout bez animací.")
+    if not success and (
+        any(v.get("anim", "none") != "none" for v in lo["views"])
+        or any(p.get("anim", "none") != "none" for p in photos)
+    ):
+        # Animace jsou volitelný efekt. Při chybě je vypneme, ale zachováme
+        # ořezy, polohy vrstev, fotky i titulky.
+        rep.log("Export s animacemi selhal, opakuji ho bez animací (ostatní úpravy zůstávají).")
         lo_plain = copy.deepcopy(lo)
         for v in lo_plain["views"]:
             v["anim"] = "none"
+        for p in lo_plain["photos"]:
+            p["anim"] = "none"
         graph_plain = loadout_graph(lo_plain, W, H, int(src_w), int(src_h), duration, photos, subs)
         success = run_full(graph_plain, "bez animací")
-    if not success:
-        rep.log("Plný export selhal. Zkouším nouzový střih bez loadoutu, titulků a efektů.")
+    if not success and bool(o.get("allow_degraded_fallback", False)):
+        # Zachováme i původní nouzový režim, ale jen po výslovném zapnutí v Nastavení.
+        rep.log("Je povolen nouzový export: výsledný klip nebude obsahovat loadout, fotky ani titulky.")
         for encoder in encoders:
             cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", start,
                    "-reinit_filter", "0", "-i", str(video), "-t", f"{duration:.3f}", "-vf",
@@ -1420,17 +1488,23 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
             cmd += ["-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart", out_file.name]
             rep.check()
             out_file.unlink(missing_ok=True)
-            rep.log(f"Nouzový crop/scale ({encoder})…")
+            rep.log(f"Nouzový export bez vrstev ({encoder})…")
             proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True,
                                   encoding="utf-8", errors="replace")
             if proc.returncode == 0 and out_file.exists() and out_file.stat().st_size > 1024:
                 success = True
-                rep.log("Klip zachráněn nouzovým exportem (bez loadoutu/titulků).")
+                clip["degraded_export"] = True
+                rep.log("Nouzový klip vytvořen; původní úpravy v tomto exportu nejsou použity.")
                 break
             out_file.unlink(missing_ok=True)
-            errors.append(f"simple {encoder}: {_ffmpeg_error(proc)}")
+            errors.append(f"fallback {encoder}: {_ffmpeg_error(proc)}")
     if not success:
-        raise RuntimeError(f"FFmpeg selhal u klipu {index}. " + " | ".join(errors)[-3000:])
+        # Nikdy nevytvářej zdánlivě úspěšný klip, který potichu zahodí uživatelův
+        # loadout, fotky nebo titulky. Chyba musí být vidět a opravitelná.
+        raise RuntimeError(
+            f"FFmpeg nedokázal vyrenderovat klip {index} se zachováním všech nastavených vrstev. "
+            + " | ".join(errors)[-3000:]
+        )
     if o["write_txt"]:
         tags = " ".join(clip.get("hashtags", []))
         (out_dir / f"{name}.txt").write_text(

@@ -63,6 +63,8 @@ class LoadoutPage(ctk.CTkFrame):
         super().__init__(master, fg_color=BG, corner_radius=0)
         self.app = app
         self.prep: dict | None = None
+        self.return_callback = None
+        self.return_page = "create"
         self.frame_img: Image.Image | None = None
         self._frame_photo = None
         self._prev_photo = None
@@ -92,7 +94,7 @@ class LoadoutPage(ctk.CTkFrame):
         btns.pack(side="right")
         ctk.CTkButton(btns, text="Zpět", height=36, corner_radius=9, fg_color=INPUT,
                       hover_color=BORDER, text_color=TEXT, font=_fnt(12),
-                      command=lambda: self.app.show("create")).pack(side="left")
+                      command=self._back).pack(side="left")
         ctk.CTkButton(btns, text="Použít pro toto video", height=36, corner_radius=9,
                       fg_color=ORANGE, hover_color=ORANGE_LIGHT, text_color="white",
                       font=_fnt(12, True), command=self._apply).pack(side="left", padx=(8, 0))
@@ -255,9 +257,11 @@ class LoadoutPage(ctk.CTkFrame):
 
     # ------------------------------------------------------------ otevření a stav
 
-    def open(self, prep: dict, lo: dict) -> None:
-        """prep = {video_id, probe, frame}; lo = výchozí loadout pro toto video."""
+    def open(self, prep: dict, lo: dict, on_apply=None, return_page: str = "create") -> None:
+        """prep = {video_id, probe, frame}; lo = výchozí nebo existující loadout."""
         self.prep = prep
+        self.return_callback = on_apply
+        self.return_page = return_page if return_page in ("create", "editor") else "create"
         probe = prep["probe"]
         self.sub.configure(text=f"Video {probe['width']}x{probe['height']}, {probe['duration'] / 60:.0f} min")
         if self.app.format_seg.get() == "Long-form":
@@ -530,7 +534,8 @@ class LoadoutPage(ctk.CTkFrame):
         def job() -> None:
             try:
                 out = render_preview(Path(self.prep["video"]), lo, cfg, probe["width"], probe["height"],
-                                     work_root(cfg) / "preview", at=probe["duration"] * 0.4)
+                                     work_root(cfg) / "preview",
+                                     at=float(self.prep.get("preview_at", probe["duration"] * 0.4)))
                 self._pv = (out, None)
             except Exception as exc:  # noqa: BLE001
                 self._pv = (None, str(exc))
@@ -708,6 +713,21 @@ class LoadoutPage(ctk.CTkFrame):
         self._load_controls()
         self._redraw()
 
+    def _back(self) -> None:
+        self.return_callback = None
+        target = self.return_page
+        self.return_page = "create"
+        self.app.show(target)
+
     def _apply(self) -> None:
         self.lo["name"] = self.name_var.get().strip() or self.lo.get("name", "loadout")
-        self.app.apply_loadout(clean_loadout(self.lo))
+        loadout = clean_loadout(self.lo)
+        callback = self.return_callback
+        target = self.return_page
+        self.return_callback = None
+        self.return_page = "create"
+        if callback is not None:
+            callback(loadout)
+            self.app.show(target)
+        else:
+            self.app.apply_loadout(loadout)

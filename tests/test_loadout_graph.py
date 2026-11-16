@@ -19,6 +19,33 @@ class LoadoutGraphTests(unittest.TestCase):
         self.assertIn("[srcv0]crop=", graph)
         self.assertNotIn("split=", graph)
 
+    def test_clean_loadout_clamps_layer_rectangles(self):
+        lo = core.clean_loadout({
+            "views": [{
+                "crop": [-0.5, 0.2, 1.8, 0.8],
+                "place": [0.9, -0.2, 0.5, 0.5],
+                "anim": "not-a-real-effect",
+                "anim_seconds": float("nan"),
+            }],
+            "photos": [{
+                "path": "overlay.png",
+                "place": [0.8, 0.8, 0.5, 0.5],
+                "start": -10,
+                "end": 5,
+            }],
+        })
+        self.assertEqual(lo["views"][0]["crop"], [0.0, 0.2, 1.0, 0.8])
+        self.assertEqual(lo["views"][0]["place"], [0.5, 0.0, 0.5, 0.5])
+        self.assertEqual(lo["views"][0]["anim"], "none")
+        self.assertEqual(lo["views"][0]["anim_seconds"], 0.6)
+        self.assertEqual(lo["photos"][0]["place"], [0.5, 0.5, 0.5, 0.5])
+        self.assertEqual(lo["photos"][0]["start"], 0.0)
+
+    def test_loadout_graph_rejects_missing_video_layers(self):
+        lo = core.clean_loadout({"views": [], "photos": []})
+        with self.assertRaisesRegex(ValueError, "žádný video záběr"):
+            core.loadout_graph(lo, 1080, 1920, 1920, 1080, 10.0, [], None)
+
     def test_presets_give_valid_crops(self):
         for key in core.LOADOUT_PRESETS:
             lo = core.preset_loadout(key, 1920, 1080)

@@ -19,8 +19,9 @@ import customtkinter as ctk
 from tkinter import filedialog
 
 import youtube
-from core import (Reporter, Cancelled, DATA_ROOT, clean_subtitles, get_source, parse_srt, render_clip,
-                  default_effects)
+from core import (Reporter, Cancelled, DATA_ROOT, clean_subtitles, clean_loadout, get_source,
+                  parse_srt, render_clip, default_effects, default_loadout, probe_video,
+                  extract_frame, work_root)
 
 INTRO_LABELS = {"none": "Žádná", "fade": "Fade in", "unblur": "Unblur in",
                 "shake": "Třes (jen na začátku)"}
@@ -87,6 +88,9 @@ class EditorPage(ctk.CTkFrame):
         ctk.CTkButton(btns, text="Přehrát", width=90, height=36, corner_radius=9, fg_color=INPUT,
                       hover_color=BORDER, text_color=TEXT, font=_fnt(12),
                       command=self.play).pack(side="left")
+        ctk.CTkButton(btns, text="Rozložení", width=92, height=36, corner_radius=9,
+                      fg_color=INPUT, hover_color=BORDER, text_color=TEXT, font=_fnt(12),
+                      command=self.edit_layout).pack(side="left", padx=(8, 0))
         ctk.CTkButton(btns, text="Nahrát na YouTube", width=150, height=36, corner_radius=9,
                       fg_color=INPUT, hover_color=BORDER, text_color=TEXT, font=_fnt(12),
                       command=self.upload_youtube).pack(side="left", padx=(8, 0))
@@ -245,6 +249,59 @@ class EditorPage(ctk.CTkFrame):
         self._redraw()
         self.status.configure(text="Uprav a ulož. Přerenderování chvíli trvá.", text_color=MUTED)
         return True
+
+    def edit_layout(self) -> None:
+        """Otevře plný editor záběrů, ořezů, webkamery, fotek a titulků pro existující klip."""
+        if self.clip is None:
+            return
+        if self.clip.get("format", "short") != "short":
+            self._set_status("Rozložení 9:16 lze upravovat jen u short-form klipů.", RED)
+            return
+        source = str(self.manifest.get("source") or "").strip()
+        if not source:
+            self._set_status("V manifestu chybí zdrojové video; rozložení nelze znovu vyrenderovat.", RED)
+            return
+        cfg = copy.deepcopy(self.app.cfg)
+        clip = dict(self.clip)
+
+        def job(rep: Reporter) -> dict:
+            video, video_id, _downloaded = get_source(source, cfg, rep)
+            probe = probe_video(video)
+            midpoint = (float(clip.get("start", 0)) + float(clip.get("end", 0))) / 2
+            at = max(0.0, min(max(0.0, probe["duration"] - 0.1), midpoint))
+            frame = work_root(cfg) / "frames" / f"{video_id}-editor.png"
+            extract_frame(video, frame, at)
+            loadout = clean_loadout(clip.get("loadout") or
+                                    default_loadout("short", probe["width"], probe["height"]))
+            return {
+                "prep": {"video_id": video_id, "probe": probe, "frame": str(frame),
+                         "video": str(video), "preview_at": at},
+                "loadout": loadout,
+            }
+
+        def done(result: dict) -> None:
+            page = self.app.pages["loadout"]
+            page.open(result["prep"], result["loadout"],
+                      on_apply=self.apply_layout, return_page="editor")
+            self.app.show("loadout")
+
+        self._run(job, "Načítám rozložení klipu…", done)
+
+    def apply_layout(self, loadout: dict) -> None:
+        """Převezme změněné vrstvy a polohu titulků zpět do právě otevřeného klipu."""
+        if self.clip is None:
+            return
+        loadout = clean_loadout(loadout)
+        if not loadout["views"]:
+            self._set_status("Rozložení musí obsahovat alespoň jeden video záběr.", RED)
+            return
+        self.clip["loadout"] = loadout
+        self.clip["subtitles"] = dict(loadout["subtitles"])
+        self.sub_x.set(loadout["subtitles"]["x"])
+        self.sub_y.set(loadout["subtitles"]["y"])
+        self.sub_size.set(loadout["subtitles"]["size"])
+        self._set_status("Rozložení je připravené. Klikni na Uložit a přerenderovat.", GREEN)
+        self.app.show("editor")
 
     # ------------------------------------------------------------ časová osa
 
@@ -588,7 +645,7 @@ class EditorPage(ctk.CTkFrame):
                 if c.get("file") == file_name:
                     c.update({k: new_clip[k] for k in
                               ("start", "end", "title", "description", "hashtags", "effects",
-                               "subtitles")})
+                               "subtitles", "loadout")})
             (folder / "clips.json").write_text(json.dumps(data, ensure_ascii=False, indent=1),
                                                encoding="utf-8")
             if downloaded and not cfg["download"]["keep_source"]:
