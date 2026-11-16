@@ -184,6 +184,9 @@ SECTIONS: list[tuple[str, str, list[F]]] = [
           "Vedle každého klipu uloží titulek, popis, hashtagy a důvod výběru."),
         F("open_folder_after", True, "bool", "Otevřít složku po dokončení",
           "Po skončení se otevře složka s klipy v Průzkumníku."),
+        F("allow_degraded_fallback", False, "bool", "Povolit nouzový export bez vrstev",
+          "Jen pokud plný export selže: vytvoří základní klip bez loadoutu, fotek a titulků. "
+          "Ve výchozím stavu vypnuto, aby aplikace nikdy potichu nezahodila úpravy."),
     ]),
 
     ("cache", "Cache a úklid", [
