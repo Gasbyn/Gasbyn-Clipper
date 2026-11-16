@@ -97,9 +97,12 @@ Na stránce **Hotové klipy** klikni na **Upravit**. Editor obsahuje:
 - **Název, popis a hashtagy**: upravíš je před nahráním.
 - **Animace na začátku**: *Fade in*, *Unblur in* (rozostřený začátek, který se vyostří) nebo *Třes* (otřes jen na začátku, pak klid). Délku nastavíš v sekundách.
 - **Fotka**: vlož obrázek (PNG, JPG, WebP), nastav polohu X a Y, velikost a v jakém čase se má zobrazovat (od–do, 0 = do konce klipu).
-- **Uložit a přerenderovat**: vytvoří klip znovu se změnami. Když zdrojové video zmizelo z cache, stáhne se znovu.
+- **Rozložení**: tlačítko v editoru otevře loadout pro existující klip. Upravíš výřezy záběrů, polohu a velikost webkamery i hry, fotky a polohu titulků.
+- **Uložit a přerenderovat**: vytvoří klip znovu se změnami a uloží nové rozložení do manifestu. Když zdrojové video zmizelo z cache, stáhne se znovu.
 
 Editor je jednodušší než CapCut. Náhled se přehraje v systémovém přehrávači (ne uvnitř aplikace), klip jde jen zkrátit, ne prodloužit nad původní okno, a animace se dají dát jen na začátek.
+
+V Nastavení → Výstup je také volba **Povolit nouzový export bez vrstev**. Ve výchozím stavu je vypnutá: pokud plný export selže, aplikace raději zobrazí chybu, než aby potichu zahodila loadout a titulky. Zapnutím lze zachovat původní nouzový režim.
 
 ## Nahrání na YouTube
 
