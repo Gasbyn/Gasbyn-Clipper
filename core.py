@@ -1476,6 +1476,28 @@ def render_clip(video: Path, segments: list[dict], clip: dict, out_dir: Path,
             p["anim"] = "none"
         graph_plain = loadout_graph(lo_plain, W, H, int(src_w), int(src_h), duration, photos, subs)
         success = run_full(graph_plain, "bez animací")
+    if not success and bool(o.get("allow_degraded_fallback", False)):
+        # Zachováme i původní nouzový režim, ale jen po výslovném zapnutí v Nastavení.
+        rep.log("Je povolen nouzový export: výsledný klip nebude obsahovat loadout, fotky ani titulky.")
+        for encoder in encoders:
+            cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-ss", start,
+                   "-reinit_filter", "0", "-i", str(video), "-t", f"{duration:.3f}", "-vf",
+                   _plain_video_filter(fmt, int(src_w), int(src_h), W, H),
+                   "-map", "0:v:0", "-map", "0:a?", "-r", str(int(spec["fps"])), "-fps_mode", "cfr"]
+            cmd += _encoder_args(encoder, spec)
+            cmd += ["-c:a", "aac", "-b:a", str(spec["audio_bitrate"]), "-movflags", "+faststart", out_file.name]
+            rep.check()
+            out_file.unlink(missing_ok=True)
+            rep.log(f"Nouzový export bez vrstev ({encoder})…")
+            proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace")
+            if proc.returncode == 0 and out_file.exists() and out_file.stat().st_size > 1024:
+                success = True
+                clip["degraded_export"] = True
+                rep.log("Nouzový klip vytvořen; původní úpravy v tomto exportu nejsou použity.")
+                break
+            out_file.unlink(missing_ok=True)
+            errors.append(f"fallback {encoder}: {_ffmpeg_error(proc)}")
     if not success:
         # Nikdy nevytvářej zdánlivě úspěšný klip, který potichu zahodí uživatelův
         # loadout, fotky nebo titulky. Chyba musí být vidět a opravitelná.
