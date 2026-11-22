@@ -1,1 +1,47 @@
-"""Gasbyn Clipper core – auto-obnova + ffmpeg fix pro yt-dlp.\n\nPři prvním importu stáhne plnou core.py z posledního dobrého commitu,\naplikuje opravu ffmpeg_location a přepíše se. Další starty už běží normálně.\n"""\nfrom __future__ import annotations\n\nimport sys\nfrom pathlib import Path\n\n_GOOD = \"11cc187f2e24842b92c02076546835a719df319d\"\n_URL = f\"https://raw.githubusercontent.com/Gasbyn/Gasbyn-Clipper/{_GOOD}/core.py\"\n\n\ndef _restore() -> None:\n    target = Path(__file__).resolve()\n    try:\n        text = target.read_text(encoding=\"utf-8\", errors=\"ignore\")\n    except OSError:\n        text = \"\"\n    # Už máme plnou verzi s ffmpeg fixem\n    if \"def run_job\" in text and \"ffmpeg_location\" in text:\n        return\n    import urllib.request\n    print(\"[Gasbyn] Obnovuji core.py z GitHubu …\")\n    data = urllib.request.urlopen(_URL, timeout=90).read().decode(\"utf-8\")\n    # Vlož ffmpeg_location do base_opts (oprava chyby merge bez ffmpeg)\n    needle = '\"socket_timeout\": 30}'\n    insert = (\n        '\"socket_timeout\": 30,\\n'\n        '                 \"ffmpeg_location\": '\n        'str(Path(ffmpeg_bin()).parent) if Path(ffmpeg_bin()).is_file() else ffmpeg_bin()}'\n    )\n    if needle in data and \"ffmpeg_location\" not in data:\n        data = data.replace(needle, insert, 1)\n    # Lepší formát string s fallbackem\n    old_fmt = (\n        '\"format\": f\"bestvideo[height<={height}]+bestaudio/'\n        'best[height<={height}]/best\",'\n    )\n    # write\n    target.write_text(data, encoding=\"utf-8\")\n    print(\"[Gasbyn] core.py obnoven. Restartuj aplikaci.\", file=sys.stderr)\n\n\n_restore()\n\n# Po zápisu načti skutečný modul (soubor už je plný)\nimport importlib.util\n\n_path = Path(__file__).resolve()\n_spec = importlib.util.spec_from_file_location(\"_gasbyn_core\", _path)\n_mod = importlib.util.module_from_spec(_spec)\nsys.modules[__name__] = _mod\n_spec.loader.exec_module(_mod)  # type: ignore[union-attr]\n"}
+"""Gasbyn Clipper core – auto-obnova + ffmpeg fix pro yt-dlp.
+
+Pri prvnim importu stahne plnou core.py z posledniho dobreho commitu,
+aplikuje opravu ffmpeg_location a prepise se. Dalsi starty uz bezi normalne.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+_GOOD = "11cc187f2e24842b92c02076546835a719df319d"
+_URL = f"https://raw.githubusercontent.com/Gasbyn/Gasbyn-Clipper/{_GOOD}/core.py"
+
+
+def _restore() -> bool:
+    target = Path(__file__).resolve()
+    try:
+        text = target.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        text = ""
+    if "def run_job" in text and len(text) > 20000:
+        return False
+    import urllib.request
+    print("[Gasbyn] Obnovuji core.py z GitHubu ...", flush=True)
+    data = urllib.request.urlopen(_URL, timeout=90).read().decode("utf-8")
+    needle = '"socket_timeout": 30}'
+    insert = (
+        '"socket_timeout": 30,\n'
+        '                 "ffmpeg_location": '
+        'str(Path(ffmpeg_bin()).parent) if Path(ffmpeg_bin()).is_file() else ffmpeg_bin()}'
+    )
+    if needle in data and "ffmpeg_location" not in data:
+        data = data.replace(needle, insert, 1)
+    target.write_text(data, encoding="utf-8")
+    print("[Gasbyn] core.py obnoven. Restartuj aplikaci.", file=sys.stderr, flush=True)
+    return True
+
+
+if _restore():
+    raise SystemExit("[Gasbyn] core.py byl obnoven – spust aplikaci znovu.")
+
+import importlib.util
+_path = Path(__file__).resolve()
+_spec = importlib.util.spec_from_file_location("_gasbyn_core", _path)
+_mod = importlib.util.module_from_spec(_spec)
+sys.modules[__name__] = _mod
+_spec.loader.exec_module(_mod)
