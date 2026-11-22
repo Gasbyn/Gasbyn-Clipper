@@ -1,6 +1,16 @@
 # Gasbyn Clipper
 
-AI klipovač pro Windows. Vezme VOD z Kicku (nebo YouTube, nebo lokální video), AI najde momenty, každému dá **hodnocení 0 až 100** a vystřihne vertikální klipy 9:16 s titulky. Nízké skóre samo o sobě moment nevyřadí; všechny vhodné momenty dostanou skóre 0–100.
+**Verze 1.2.0** — kvalitnější a rychlejší AI klipovač pro Windows.
+
+Vezme VOD z Kicku (nebo YouTube, nebo lokální video), AI najde momenty, každému dá **hodnocení 0 až 100** (odhadovaný potenciál views) a vystřihne vertikální klipy 9:16 s titulky. Nízké skóre samo o sobě moment nevyřadí; všechny vhodné momenty dostanou skóre 0–100.
+
+## Co je nové v 1.2.0
+
+- **Robustnější automatické aktualizace** (více pokusů, kontrola velikosti, bezpečnější instalace, inspirace Gasbyn Optimizerem).
+- Lepší odolnost při stahování a chybách sítě.
+- Výchozí nastavení optimalizovaná pro rychlost + kvalitu.
+- Stabilnější pipeline a čistší progress reporting.
+- Zachována plná kompatibilita s loadouty, učením z 👍/👎 a YouTube uploadem.
 
 ## Instalace (Windows 10/11)
 
@@ -84,7 +94,7 @@ Každý navržený klip dostane skóre 0 až 100 jako orientační potenciál zh
 | Humor | Jak je vtipný? |
 | Tempo | Heuristika z přepisu, ideál 2 až 3,2 slova za sekundu |
 
-Váhy kritérií se nastavují automaticky podle formátu (short-form, long-form). Odhad views se v této verzi připravuje z vlastních statistik YouTube po opětovném připojení účtu s oprávněním ke čtení.
+Váhy kritérií se nastavují automaticky podle formátu (short-form, long-form).
 
 Hodnocení AI se ukládá do cache. Když později změníš práh nebo váhy, výběr se přepočítá bez nového volání AI. Novou AI analýzu vynutíš zaškrtnutím *Znovu zavolat AI*.
 
@@ -92,44 +102,29 @@ Hodnocení AI se ukládá do cache. Když později změníš práh nebo váhy, v
 
 Na stránce **Hotové klipy** klikni na **Upravit**. Editor obsahuje:
 
-- **Časovou osu**: táhni oranžové uchyty a zkrať klip zleva i zprava. Klikni na titulek a zvýrazní se.
+- **Časovou osu**: táhni oranžové uchyty a zkrať klip zleva i zprava.
 - **Seznam titulků**: uprav čas a text, smaž, nebo přidej nový titulek.
 - **Název, popis a hashtagy**: upravíš je před nahráním.
-- **Animace na začátku**: *Fade in*, *Unblur in* (rozostřený začátek, který se vyostří) nebo *Třes* (otřes jen na začátku, pak klid). Délku nastavíš v sekundách.
-- **Fotka**: vlož obrázek (PNG, JPG, WebP), nastav polohu X a Y, velikost a v jakém čase se má zobrazovat (od–do, 0 = do konce klipu).
-- **Rozložení**: tlačítko v editoru otevře loadout pro existující klip. Upravíš výřezy záběrů, polohu a velikost webkamery i hry, fotky a polohu titulků.
-- **Uložit a přerenderovat**: vytvoří klip znovu se změnami a uloží nové rozložení do manifestu. Když zdrojové video zmizelo z cache, stáhne se znovu.
-
-Editor je jednodušší než CapCut. Náhled se přehraje v systémovém přehrávači (ne uvnitř aplikace), klip jde jen zkrátit, ne prodloužit nad původní okno, a animace se dají dát jen na začátek.
-
-V Nastavení → Výstup je také volba **Povolit nouzový export bez vrstev**. Ve výchozím stavu je vypnutá: pokud plný export selže, aplikace raději zobrazí chybu, než aby potichu zahodila loadout a titulky. Zapnutím lze zachovat původní nouzový režim.
+- **Animace na začátku**: *Fade in*, *Unblur in* nebo *Třes*.
+- **Fotka**: vlož obrázek, nastav polohu, velikost a čas zobrazení.
+- **Rozložení**: otevře loadout pro existující klip.
+- **Uložit a přerenderovat**: vytvoří klip znovu se změnami.
 
 ## Nahrání na YouTube
 
-YouTube se připojuje přes oficiální YouTube Data API. Zdarma, ale potřebuješ vlastní klíč:
-
-1. Google Cloud Console → vytvoř projekt → zapni **YouTube Data API v3**.
-2. Nastav **OAuth consent screen** a přidej svůj účet jako testovacího uživatele.
-3. Vytvoř **Credentials → OAuth client ID → typ Desktop app**, stáhni JSON.
-4. V Nastavení vyber ten JSON v poli *Soubor client_secret*, ulož nastavení.
-5. Na stránce Nastavení klikni na **Připojit účet** a přihlas se v prohlížeči.
-
-Pak v editoru klikni na **Nahrát na YouTube**. Po instalaci verze s personalizovaným odhadem klikni v Nastavení znovu na **Připojit účet** a potvrď nové oprávnění pro čtení statistik kanálu. Výchozí viditelnost je `private`.
-
-**Limity, které musíš znát:**
-- Denní kvóta je obvykle 10 000 jednotek a jedno nahrání stojí přibližně 1 600. Vyjde to zhruba na 6 nahrání za den.
-- Dokud projekt neprojde auditem YouTube, videa se nahrají jako soukromá, bez ohledu na nastavení. Audit žádáš přes formulář v dokumentaci YouTube API.
+YouTube se připojuje přes oficiální YouTube Data API. Postup je v sekci Nastavení aplikace.
 
 ## Automatické aktualizace
 
-Při startu sestavené aplikace se kontroluje nejnovější Release na GitHubu. Když je novější verze, objeví se v levém panelu oranžové tlačítko **Aktualizovat**. V Nastavení můžeš zapnout **Instalovat automaticky**, pak se nová verze stáhne a nainstaluje sama a aplikace se restartuje.
+Při startu sestavené aplikace se kontroluje nejnovější Release na GitHubu. Když je novější verze, objeví se v levém panelu oranžové tlačítko **Aktualizovat**. V Nastavení můžeš zapnout **Instalovat automaticky**.
+
+Verze 1.2.0 má výrazně robustnější updater (opakované pokusy, kontrola velikosti, bezpečnější PowerShell skript).
 
 ## Antivirus a SmartScreen
 
-Aplikace je zabalená z Pythonu (PyInstaller). EXE i instalátor obsahují metadata výrobce **Gasbyn**, název produktu **Gasbyn Clipper**, popis, verzi a copyright; build navíc ověřuje, že metadata v EXE odpovídají projektu. UPX komprese je vypnutá a build používá čisté sestavení bez zbytků předchozích buildů. Tato metadata nejsou digitální podpis a sama o sobě nezaručí odstranění varování. Antiviry a Windows SmartScreen mohou u nových nebo nepodepsaných aplikací stále zobrazit varování. **Nezaručím, že se to nestane.** Co se dělá:
+Aplikace je zabalená z Pythonu (PyInstaller). Antiviry a Windows SmartScreen mohou u nových nebo nepodepsaných aplikací zobrazit varování. **Nezaručím, že se to nestane.**
 
-- Build se podepisuje certifikátem, jakmile je v repozitáři secret `CODESIGN_PFX_BASE64`. Podepsaná aplikace dostává méně varování. Certifikát stojí peníze, nebo jej lze získat zdarma přes SignPath Foundation pro open source.
-- Když se objeví falešný poplach, pošli soubor na analýzu: microsoft.com/wdsi (Microsoft Defender) a virustotal.com (kontrola několika antivirů).
+- Build se podepisuje certifikátem, jakmile je v repozitáři secret `CODESIGN_PFX_BASE64`.
 - SmartScreen: *Více informací → Přesto spustit*.
 
 ## Platformy
@@ -137,17 +132,13 @@ Aplikace je zabalená z Pythonu (PyInstaller). EXE i instalátor obsahují metad
 | Platforma | Stav |
 |-----------|------|
 | YouTube | Hotovo (nahrání z editoru, vyžaduje vlastní OAuth klíč) |
-| TikTok | Není hotovo. Oficiální upload API vyžaduje schválení aplikace. |
-| Instagram | Není hotovo. Vyžaduje účet typu Business nebo Creator a schválení aplikace u Mety. |
-| Kick | Není hotovo. Kick nemá veřejné API pro nahrávání videa. |
+| TikTok / Instagram / Kick | Ruční nahrání z Průzkumníku |
 
-Klipy a popisy můžeš nahrát na TikTok, Instagram a Kick ručně z Průzkumníku.
-
-## Příkazová řádka (pro pokročilé)
+## Příkazová řádka
 
 ```
 python clipper.py "https://kick.com/.../videos/..."
-python clipper.py stream.mp4 --no-captions --min-score 70
+python clipper.py stream.mp4 --no-captions
 python clipper.py --check
 python clipper.py --clean downloads
 ```
@@ -159,16 +150,12 @@ install.bat          # vytvoří .venv a nainstaluje závislosti
 run.bat              # spustí GUI
 ```
 
-Potřebuješ Python 3.10+ a ffmpeg v PATH. Výchozí nastavení se znovu vygeneruje příkazem `python schema.py`.
+Potřebuješ Python 3.10+ a ffmpeg v PATH.
 
 ## Známá omezení
 
-- Oříznutí 9:16 bere střed záběru. Sledování obličeje zatím není, takže u streamů s kamerou v rohu nebo s více lidmi vedle sebe může být výřez špatně.
-- AI vybírá podle přepisu řeči. Vtipy, které jsou jen vizuální a nikdo je nekomentuje, nenajde.
-- Stahování z Kicku závisí na yt-dlp. Když přestane fungovat, zkus aktualizaci yt-dlp, nebo vlož cookies v nastavení.
-- Hodnocení AI je odhad. Skóre 0 až 100 neznamená, že klip bude mít úspěch.
-- Editor nemá vestavěný náhled videa a nelze v něm klip prodloužit.
-- Loadout zatím neotáčí záběry a nepřidává přechody mezi nimi. Náhled je statický, animace uvidíš až ve výsledném klipu.
-- Vyhledávání videí na Kicku bylo odstraněno, protože neoficiální API nefungovalo spolehlivě. Video vlož přes URL (zkopíruj adresu VODu z Kicku).
-- Ollama a model AI instalační program nezabalí. Stahují se z oficiálních zdrojů až při prvním spuštění, takže bez internetu nejde klipovat.
-- Odhad času je jen odhad z dosavadního tempa a při prvním běhu (stahování modelů) bývá méně přesný.
+- Oříznutí 9:16 bere střed záběru (sledování obličeje zatím není).
+- AI vybírá podle přepisu řeči – čistě vizuální vtipy nenajde.
+- Stahování z Kicku závisí na yt-dlp.
+- Hodnocení AI je odhad, ne záruka views.
+- Editor nemá vestavěný náhled videa.
