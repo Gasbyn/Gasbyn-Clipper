@@ -2,7 +2,7 @@
 ; Instalace je jen pro aktuálního uživatele (není potřeba správce), funguje na Windows 10 i 11.
 
 #define AppName "Gasbyn Clipper"
-#define AppVersion "1.1.0"
+#define AppVersion "1.8.0"
 
 [Setup]
 AppId={{B7C2D1E4-5A3F-4C8B-9D6E-1F2A3B4C5D6E}
@@ -45,4 +45,5 @@ Name: "{group}\{#AppName}"; Filename: "{app}\GasbynClipper.exe"; WorkingDir: "{a
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\GasbynClipper.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\GasbynClipper.exe"; WorkingDir: "{app}"; Description: "Spustit Gasbyn Clipper"; Flags: nowait postinstall skipifsilent
+; shellexec = ShellExecute místo CreateProcess → správně zvládne UAC (chyba 740)
+Filename: "{app}\GasbynClipper.exe"; WorkingDir: "{app}"; Description: "Spustit Gasbyn Clipper"; Flags: nowait postinstall skipifsilent shellexec
