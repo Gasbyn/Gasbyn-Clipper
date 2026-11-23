@@ -82,7 +82,8 @@ jobs:
             --collect-all customtkinter --collect-all googleapiclient `
             --collect-all google_auth_oauthlib `
             --collect-all pystray --collect-all PIL `
-            app.py
+            --hidden-import bugreport --hidden-import ui_bugreport `
+            CLIPPER_BOOT.py
           # settings.yaml se do instalace nekopíruje: nastavení žijí v %APPDATA%\GasbynClipper
           New-Item -ItemType Directory -Force -Path dist\GasbynClipper\ffmpeg | Out-Null
           Copy-Item ffmpeg_pkg\ffmpeg.exe dist\GasbynClipper\ffmpeg\
@@ -136,8 +137,6 @@ jobs:
             FileDescription = 'Gasbyn Clipper Setup'
             OriginalFilename = 'Setup.exe'
           }
-          # Jen varování: u instalátoru Inno Setup nedoložená hodnota nesmí zablokovat vydání.
-          # Skutečné hodnoty se vypíšou, aby bylo vidět, co Inno zapsal.
           foreach ($entry in $checks.GetEnumerator()) {
             $actual = ([string]$info.($entry.Key)).Trim()
             if ($actual -ne $entry.Value) {
