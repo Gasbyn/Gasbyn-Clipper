@@ -1,7 +1,7 @@
 """Gasbyn Clipper core – auto-obnova + opravy (ffmpeg, crop).
 
-Pri prvnim importu stahne plnou core.py z posledniho dobreho commitu,
-aplikuje opravy a prepise se. Dalsi starty uz bezi normalne.
+Pri prvnim importu stahne plnou core.py, aplikuje opravy a nacte ji.
+V frozen instalaci uzivatel nemusi nic delat – staci jeden restart max.
 """
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ def _apply_patches(data: str) -> str:
     if _MARKER in data:
         return data
 
-    # 1) ffmpeg_location pro yt-dlp
     needle = '"socket_timeout": 30}'
     insert = (
         '"socket_timeout": 30,\n'
@@ -27,7 +26,6 @@ def _apply_patches(data: str) -> str:
     if needle in data and "ffmpeg_location" not in data:
         data = data.replace(needle, insert, 1)
 
-    # 2) Robustnejsi crop v loadout_graph
     old_crop = '''        cx, cy, cw, ch = v["crop"]
         cw_px = min(src_w, _even(cw * src_w))
         ch_px = min(src_h, _even(ch * src_h))
@@ -41,7 +39,6 @@ def _apply_patches(data: str) -> str:
                      f"setsar=1,format=yuva420p[v{i}raw]")'''
 
     new_crop = '''        cx, cy, cw, ch = v["crop"]
-        # Bezpecne rozmery: min 2 px, vejde se do zdroje, sude (yuv420)
         cw_px = max(2, min(src_w, _even(max(0.01, cw) * src_w)))
         ch_px = max(2, min(src_h, _even(max(0.01, ch) * src_h)))
         x_px = max(0, min(src_w - cw_px, int(cx * src_w)))
@@ -55,7 +52,6 @@ def _apply_patches(data: str) -> str:
         ph = max(2, _even(max(0.01, bh) * H))
         px = max(0, min(W - 2, int(round(bx * W))))
         py = max(0, min(H - 2, int(round(by * H))))
-        # scale+crop s explicitnim offsetem – odolne vuci zaokrouhleni
         parts.append(
             f"[srcv{i}]crop={cw_px}:{ch_px}:{x_px}:{y_px},"
             f"scale={pw}:{ph}:force_original_aspect_ratio=increase:flags=lanczos,"
@@ -74,25 +70,27 @@ def _apply_patches(data: str) -> str:
     return data
 
 
-def _restore() -> bool:
+def _needs_restore(text: str) -> bool:
+    return not ("def run_job" in text and len(text) > 20000 and _MARKER in text)
+
+
+def _restore_if_needed() -> None:
     target = Path(__file__).resolve()
     try:
         text = target.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         text = ""
-    if "def run_job" in text and len(text) > 20000 and _MARKER in text:
-        return False
+    if not _needs_restore(text):
+        return
     import urllib.request
-    print("[Gasbyn] Obnovuji core.py z GitHubu ...", flush=True)
+    print("[Gasbyn] Obnovuji core.py (ffmpeg + crop) ...", flush=True)
     data = urllib.request.urlopen(_URL, timeout=90).read().decode("utf-8")
     data = _apply_patches(data)
     target.write_text(data, encoding="utf-8")
-    print("[Gasbyn] core.py obnoven (ffmpeg + crop fix). Restartuj aplikaci.", file=sys.stderr, flush=True)
-    return True
+    print("[Gasbyn] core.py obnoven.", flush=True)
 
 
-if _restore():
-    raise SystemExit("[Gasbyn] core.py byl obnoven – spust aplikaci znovu.")
+_restore_if_needed()
 
 import importlib.util
 _path = Path(__file__).resolve()
